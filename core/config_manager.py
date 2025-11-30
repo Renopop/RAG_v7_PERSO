@@ -106,34 +106,43 @@ def save_config(config: StorageConfig) -> bool:
 #  FALLBACK AUTOMATIQUE N:\ -> D:\
 # =====================================================================
 
-def is_network_path_accessible(path: Optional[str] = None) -> bool:
+def is_network_path_accessible(path: Optional[str] = None, timeout: float = 3.0) -> bool:
     """
     Vérifie si le chemin réseau primaire est accessible.
 
     Args:
         path: Chemin à tester (défaut: PRIMARY_NETWORK_BASE)
+        timeout: Timeout en secondes pour éviter le blocage sur chemins réseau
 
     Returns:
         True si le chemin est accessible en lecture
     """
+    import threading
+    import concurrent.futures
+
     test_path = path or PRIMARY_NETWORK_BASE
 
-    try:
-        if not test_path:
-            return False
-        # Normaliser pour gérer les majuscules/minuscules sur Windows
-        path_upper = test_path.upper()
-        # Pour les chemins réseau Windows (\\server\share, //server/share)
-        # ou les lettres de lecteur (N:, D:, etc.)
-        is_windows_path = (
-            test_path.startswith(r"\\") or
-            test_path.startswith("//") or
-            (len(test_path) >= 2 and path_upper[1] == ":")
-        )
-        if is_windows_path:
+    if not test_path:
+        return False
+
+    def check_path() -> bool:
+        """Vérifie l'accès au chemin (peut bloquer sur réseau)."""
+        try:
             return os.path.exists(test_path) and os.access(test_path, os.R_OK)
-        return os.path.exists(test_path) and os.access(test_path, os.R_OK)
-    except (OSError, PermissionError, TypeError, Exception) as e:
+        except (OSError, PermissionError, TypeError):
+            return False
+
+    try:
+        # Utiliser un thread avec timeout pour éviter le blocage
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(check_path)
+            try:
+                result = future.result(timeout=timeout)
+                return result
+            except concurrent.futures.TimeoutError:
+                print(f"[CONFIG] Timeout ({timeout}s) - chemin réseau inaccessible: {test_path}")
+                return False
+    except Exception as e:
         print(f"[CONFIG] Chemin réseau inaccessible ({test_path}): {e}")
         return False
 
