@@ -669,8 +669,12 @@ if selected_doc and selected_doc in DOC_FILES:
 #   SIDEBAR (admin uniquement)
 # ========================
 
+# Appliquer le fallback des chemins AVANT de lister les bases
+# Cela permet d'utiliser D:\ si N:\ est inaccessible
+_effective_paths = get_effective_paths()
+base_root = _effective_paths.get("base_root_dir", BASE_ROOT_DIR)
+
 # Définir les variables par défaut (utilisées même si sidebar cachée)
-base_root = BASE_ROOT_DIR
 bases = list_bases(base_root)
 use_easa_sections = st.session_state.get("use_easa_sections", False)
 
@@ -761,23 +765,19 @@ if is_admin:
 
         st.markdown("---")
 
-        # Chemins effectifs (avec fallback automatique)
-        effective_paths = get_effective_paths()
-        base_root = effective_paths.get("base_root_dir", BASE_ROOT_DIR)
-
-        if effective_paths.get("using_fallback"):
+        # Afficher les chemins effectifs (deja calcules plus haut avec fallback)
+        if _effective_paths.get("using_fallback"):
             st.warning("⚠️ Stockage en mode FALLBACK (D:\\)")
 
         st.info(
             f"📁 Bases FAISS : `{base_root}`"
         )
         st.info(
-            f"📝 CSV d'ingestion : `{effective_paths.get('csv_import_dir', CSV_IMPORT_DIR)}`"
+            f"📝 CSV d'ingestion : `{_effective_paths.get('csv_import_dir', CSV_IMPORT_DIR)}`"
         )
         st.info(
-            f"📊 CSV de tracking : `{effective_paths.get('csv_export_dir', CSV_EXPORT_DIR)}`"
+            f"📊 CSV de tracking : `{_effective_paths.get('csv_export_dir', CSV_EXPORT_DIR)}`"
         )
-        bases = list_bases(base_root)
         if bases:
             st.success(f"✅ {len(bases)} base(s) trouvee(s)")
         else:
