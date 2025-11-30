@@ -1484,6 +1484,11 @@ def embed_in_batches_offline(
     if not texts:
         return np.array([], dtype=np.float32).reshape(0, EXPECTED_EMBEDDING_DIMENSION)
 
+    # Valider batch_size pour eviter division par zero ou boucle infinie
+    if batch_size <= 0:
+        _log.warning(f"[OFFLINE-EMB] batch_size invalide ({batch_size}), utilisation de 32")
+        batch_size = 32
+
     try:
         embeddings_client = get_offline_embeddings(log=_log)
     except Exception as e:
