@@ -837,21 +837,26 @@ with tab_csv:
             import subprocess
             import sys
 
+            # Chemin absolu vers csv_generator_gui.py (même dossier que ce script)
+            ui_dir = os.path.dirname(os.path.abspath(__file__))
+            gui_script = os.path.join(ui_dir, "csv_generator_gui.py")
+
             try:
                 if sys.platform == "win32":
                     subprocess.Popen(
-                        ["python", "csv_generator_gui.py"],
-                        creationflags=subprocess.CREATE_NEW_CONSOLE
+                        ["python", gui_script],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                        cwd=ui_dir
                     )
                 else:
-                    subprocess.Popen(["python", "csv_generator_gui.py"])
+                    subprocess.Popen(["python", gui_script], cwd=ui_dir)
 
                 st.success("✅ Application GUI lancée ! Vérifiez vos fenêtres ouvertes.")
                 st.info("💡 Utilisez l'application pour créer votre CSV, puis revenez ici pour l'ingérer.")
             except Exception as e:
                 st.error(f"❌ Erreur lors du lancement : {e}")
                 st.info("💡 Lancez manuellement dans un terminal :")
-                st.code("python csv_generator_gui.py", language="bash")
+                st.code(f"python {gui_script}", language="bash")
 
     with col_btn2:
         if st.button(
@@ -864,21 +869,26 @@ with tab_csv:
             import subprocess
             import sys
 
+            # Chemin absolu vers csv_generator_gui.py (même dossier que ce script)
+            ui_dir = os.path.dirname(os.path.abspath(__file__))
+            gui_script = os.path.join(ui_dir, "csv_generator_gui.py")
+
             try:
                 if sys.platform == "win32":
                     subprocess.Popen(
-                        ["python", "csv_generator_gui.py"],
-                        creationflags=subprocess.CREATE_NEW_CONSOLE
+                        ["python", gui_script],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                        cwd=ui_dir
                     )
                 else:
-                    subprocess.Popen(["python", "csv_generator_gui.py"])
+                    subprocess.Popen(["python", gui_script], cwd=ui_dir)
 
                 st.success("✅ Application GUI lancée !")
                 st.info("💡 Utilisez le bouton '📂 Ouvrir un CSV' dans l'interface pour charger un CSV existant.")
             except Exception as e:
                 st.error(f"❌ Erreur lors du lancement : {e}")
                 st.info("💡 Lancez manuellement dans un terminal :")
-                st.code("python csv_generator_gui.py", language="bash")
+                st.code(f"python {gui_script}", language="bash")
 
     st.markdown("---")
 
