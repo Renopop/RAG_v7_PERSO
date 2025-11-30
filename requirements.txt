@@ -1,0 +1,34 @@
+# Système RAG avec FAISS et Streamlit
+
+# Interface web Streamlit
+streamlit>=1.28.0
+
+# Interface GUI pour création de CSV (CustomTkinter)
+customtkinter>=5.2.0
+
+# Base de données vectorielle - FAISS
+faiss-cpu>=1.7.4
+# Note: utilisez faiss-gpu si vous avez un GPU CUDA disponible
+
+# Traitement de documents
+pdfminer.six>=20221105
+pymupdf>=1.24.0  # Fallback pour extraction PDF robuste
+pdfplumber>=0.10.0  # Extraction améliorée des tableaux PDF
+python-docx>=0.8.11
+pywin32>=306; sys_platform == "win32"  # Conversion .doc → .docx via Microsoft Word
+
+# Traitement de texte
+langdetect>=1.0.9
+unidecode>=1.3.6
+chardet>=5.1.0
+beautifulsoup4>=4.12.0  # Parsing HTML (Confluence)
+
+# API et modèles (Snowflake Arctic + DALLEM)
+openai>=1.0.0
+httpx>=0.24.0
+requests>=2.31.0  # Fallback pour appels HTTP
+
+# Utilitaires
+numpy>=1.24.0
+packaging>=23.0
+psutil>=5.9.0  # Détection RAM pour auto-configuration mémoire
