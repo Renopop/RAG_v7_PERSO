@@ -55,11 +55,19 @@ OFFLINE_MODELS_CONFIG = {
     },
 }
 
-# Chemins de stockage avec fallback
-STORAGE_PATHS = {
-    "primary": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE",
-    "fallback": r"D:\FAISS_DATABASE",
-}
+# Chemins de stockage avec fallback - importes depuis config_manager pour eviter duplication
+try:
+    from core.config_manager import PRIMARY_NETWORK_BASE, FALLBACK_LOCAL_BASE
+    STORAGE_PATHS = {
+        "primary": PRIMARY_NETWORK_BASE,
+        "fallback": FALLBACK_LOCAL_BASE,
+    }
+except ImportError:
+    # Fallback si config_manager n'est pas accessible
+    STORAGE_PATHS = {
+        "primary": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE",
+        "fallback": r"D:\FAISS_DATABASE",
+    }
 
 
 # =============================================================================
@@ -301,11 +309,21 @@ def get_storage_path(subdir: str = "") -> str:
 def _is_path_accessible(path: str) -> bool:
     """Verifie si un chemin est accessible en lecture."""
     try:
-        # Pour les chemins reseau Windows
-        if path.startswith(r"\\") or path.startswith("N:") or path.startswith("//"):
+        if not path:
+            return False
+        # Normaliser le chemin pour Windows
+        path_upper = path.upper()
+        # Verifier chemin reseau Windows (\\server\share ou //server/share)
+        # ou lettre de lecteur (N:, D:, etc.)
+        is_windows_path = (
+            path.startswith(r"\\") or
+            path.startswith("//") or
+            (len(path) >= 2 and path_upper[1] == ":")
+        )
+        if is_windows_path:
             return os.path.exists(path) and os.access(path, os.R_OK)
         return os.path.exists(path) and os.access(path, os.R_OK)
-    except (OSError, PermissionError):
+    except (OSError, PermissionError, TypeError):
         return False
 
 
@@ -352,17 +370,22 @@ class OfflineEmbeddings:
         return cls._instance
 
     def __init__(self, model_path: Optional[str] = None, log=None):
+        # Double-check locking pour thread-safety
         if self._initialized:
             return
 
-        self._log = log or logger
-        self.model_path = model_path or OFFLINE_MODELS_CONFIG["embeddings"]["path"]
-        self.model = None
-        self.tokenizer = None
-        self.device = None
-        self.dimension = 1024
-        self._model_lock = threading.Lock()
-        self._initialized = True
+        with self._lock:
+            if self._initialized:
+                return
+
+            self._log = log or logger
+            self.model_path = model_path or OFFLINE_MODELS_CONFIG["embeddings"]["path"]
+            self.model = None
+            self.tokenizer = None
+            self.device = None
+            self.dimension = OFFLINE_MODELS_CONFIG["embeddings"].get("dimension", 1024)
+            self._model_lock = threading.Lock()
+            self._initialized = True
 
     def _ensure_loaded(self):
         """Charge le modele si pas deja fait (lazy loading)."""
@@ -448,37 +471,52 @@ class OfflineEmbeddings:
 
         self._ensure_loaded()
 
-        with self._model_lock:
-            with torch.no_grad():
-                # Tokenizer avec padding
-                inputs = self.tokenizer(
-                    texts,
-                    padding=True,
-                    truncation=True,
-                    max_length=8192,
-                    return_tensors="pt",
-                )
+        try:
+            with self._model_lock:
+                with torch.no_grad():
+                    # Tokenizer avec padding
+                    inputs = self.tokenizer(
+                        texts,
+                        padding=True,
+                        truncation=True,
+                        max_length=8192,
+                        return_tensors="pt",
+                    )
 
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-                # Forward pass
-                outputs = self.model(**inputs)
+                    # Forward pass
+                    outputs = self.model(**inputs)
 
-                # Mean pooling sur les embeddings
-                attention_mask = inputs["attention_mask"]
-                embeddings = outputs.last_hidden_state
+                    # Mean pooling sur les embeddings
+                    attention_mask = inputs["attention_mask"]
+                    embeddings = outputs.last_hidden_state
 
-                # Masquer les tokens de padding
-                mask_expanded = attention_mask.unsqueeze(-1).expand(embeddings.size()).float()
-                sum_embeddings = torch.sum(embeddings * mask_expanded, dim=1)
-                sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
+                    # Masquer les tokens de padding
+                    mask_expanded = attention_mask.unsqueeze(-1).expand(embeddings.size()).float()
+                    sum_embeddings = torch.sum(embeddings * mask_expanded, dim=1)
+                    sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
 
-                mean_embeddings = sum_embeddings / sum_mask
+                    mean_embeddings = sum_embeddings / sum_mask
 
-                # Normaliser L2
-                normalized = torch.nn.functional.normalize(mean_embeddings, p=2, dim=1)
+                    # Normaliser L2
+                    normalized = torch.nn.functional.normalize(mean_embeddings, p=2, dim=1)
 
-                return normalized.cpu().numpy().astype(np.float32)
+                    return normalized.cpu().numpy().astype(np.float32)
+
+        except RuntimeError as e:
+            # Gestion CUDA OOM
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                self._log.error(f"[OFFLINE-EMB] CUDA OOM lors de l'embedding: {e}")
+                # Vider le cache GPU
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                # Retourner des embeddings zeros en fallback
+                self._log.warning(f"[OFFLINE-EMB] Fallback: embeddings zeros pour {len(texts)} textes")
+                return np.zeros((len(texts), self.dimension), dtype=np.float32)
+            raise
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """
@@ -547,6 +585,11 @@ class OfflineEmbeddings:
         Returns:
             Embedding numpy array (float32, dimension 1024)
         """
+        # Verifier que le texte n'est pas None ou vide
+        if not text:
+            self._log.warning("[OFFLINE-EMB] embed_single appele avec texte vide/None")
+            return np.zeros(self.dimension, dtype=np.float32)
+
         try:
             if role == "query":
                 emb = np.array(self.embed_queries([text])[0], dtype=np.float32)
@@ -588,16 +631,21 @@ class OfflineReranker:
         return cls._instance
 
     def __init__(self, model_path: Optional[str] = None, log=None):
+        # Double-check locking pour thread-safety
         if self._initialized:
             return
 
-        self._log = log or logger
-        self.model_path = model_path or OFFLINE_MODELS_CONFIG["reranker"]["path"]
-        self.model = None
-        self.tokenizer = None
-        self.device = None
-        self._model_lock = threading.Lock()
-        self._initialized = True
+        with self._lock:
+            if self._initialized:
+                return
+
+            self._log = log or logger
+            self.model_path = model_path or OFFLINE_MODELS_CONFIG["reranker"]["path"]
+            self.model = None
+            self.tokenizer = None
+            self.device = None
+            self._model_lock = threading.Lock()
+            self._initialized = True
 
     def _ensure_loaded(self):
         """Charge le modele si pas deja fait."""
@@ -679,38 +727,56 @@ class OfflineReranker:
 
         self._ensure_loaded()
 
-        with self._model_lock:
-            with torch.no_grad():
-                # Preparer les paires query-document
-                pairs = [[query, doc] for doc in documents]
+        try:
+            with self._model_lock:
+                with torch.no_grad():
+                    # Preparer les paires query-document
+                    pairs = [[query, doc] for doc in documents]
 
-                # Tokenizer
-                inputs = self.tokenizer(
-                    pairs,
-                    padding=True,
-                    truncation=True,
-                    max_length=512,
-                    return_tensors="pt",
-                )
+                    # Tokenizer
+                    inputs = self.tokenizer(
+                        pairs,
+                        padding=True,
+                        truncation=True,
+                        max_length=512,
+                        return_tensors="pt",
+                    )
 
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-                # Scores
-                outputs = self.model(**inputs)
-                scores = outputs.logits.squeeze(-1).cpu().numpy()
+                    # Scores
+                    outputs = self.model(**inputs)
+                    scores = outputs.logits.squeeze(-1).cpu().numpy()
 
-                # Si une seule dimension, convertir en array
-                if scores.ndim == 0:
-                    scores = np.array([scores])
+                    # Si une seule dimension, convertir en array
+                    if scores.ndim == 0:
+                        scores = np.array([scores])
 
-                # Creer les paires (index, score) et trier
-                results = [(i, float(s)) for i, s in enumerate(scores)]
-                results.sort(key=lambda x: x[1], reverse=True)
+                    # Creer les paires (index, score) et trier
+                    results = [(i, float(s)) for i, s in enumerate(scores)]
+                    results.sort(key=lambda x: x[1], reverse=True)
+        except RuntimeError as e:
+            # Gestion CUDA OOM
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                self._log.error(f"[OFFLINE-RR] CUDA OOM lors du reranking: {e}")
+                # Vider le cache GPU
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                # Retourner les documents dans l'ordre original avec score 0
+                self._log.warning("[OFFLINE-RR] Fallback: retour ordre original")
+                return [(i, 0.0) for i in range(len(documents))]
+            raise
+        except Exception as e:
+            self._log.error(f"[OFFLINE-RR] Erreur reranking: {e}")
+            # Retourner les documents dans l'ordre original
+            return [(i, 0.0) for i in range(len(documents))]
 
-                if top_k:
-                    results = results[:top_k]
+        if top_k:
+            results = results[:top_k]
 
-                return results
+        return results
 
 
 # =============================================================================
@@ -737,18 +803,23 @@ class OfflineLLM:
         return cls._instance
 
     def __init__(self, model_path: Optional[str] = None, log=None):
+        # Double-check locking pour thread-safety
         if self._initialized:
             return
 
-        self._log = log or logger
-        self.model_path = model_path or OFFLINE_MODELS_CONFIG["llm"]["path"]
-        self.model = None
-        self.tokenizer = None
-        self.device = None
-        self.gpu_info = None
-        self.config = None
-        self._model_lock = threading.Lock()
-        self._initialized = True
+        with self._lock:
+            if self._initialized:
+                return
+
+            self._log = log or logger
+            self.model_path = model_path or OFFLINE_MODELS_CONFIG["llm"]["path"]
+            self.model = None
+            self.tokenizer = None
+            self.device = None
+            self.gpu_info = None
+            self.config = None
+            self._model_lock = threading.Lock()
+            self._initialized = True
 
     def _ensure_loaded(self):
         """Charge le modele si pas deja fait."""
@@ -867,37 +938,53 @@ class OfflineLLM:
 
         self._ensure_loaded()
 
-        with self._model_lock:
-            with torch.no_grad():
-                # Tokenizer
-                inputs = self.tokenizer(
-                    prompt,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=self.config.get("max_length", 2048),
-                )
+        try:
+            with self._model_lock:
+                with torch.no_grad():
+                    # Tokenizer
+                    inputs = self.tokenizer(
+                        prompt,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=self.config.get("max_length", 2048),
+                    )
 
-                if self.gpu_info and self.gpu_info.available:
-                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                    if self.gpu_info and self.gpu_info.available:
+                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-                # Generation
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature if do_sample else 1.0,
-                    top_p=top_p if do_sample else 1.0,
-                    do_sample=do_sample,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                )
+                    # Generation
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_new_tokens=max_new_tokens,
+                        temperature=temperature if do_sample else 1.0,
+                        top_p=top_p if do_sample else 1.0,
+                        do_sample=do_sample,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
+                    )
 
-                # Decoder
-                generated_text = self.tokenizer.decode(
-                    outputs[0][inputs["input_ids"].shape[1]:],
-                    skip_special_tokens=True,
-                )
+                    # Decoder
+                    generated_text = self.tokenizer.decode(
+                        outputs[0][inputs["input_ids"].shape[1]:],
+                        skip_special_tokens=True,
+                    )
 
-                return generated_text.strip()
+                    return generated_text.strip()
+
+        except RuntimeError as e:
+            # Gestion CUDA OOM
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                self._log.error(f"[OFFLINE-LLM] CUDA OOM lors de la generation: {e}")
+                # Vider le cache GPU
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                return "[ERREUR] Memoire GPU insuffisante pour generer une reponse. Essayez avec un prompt plus court."
+            raise
+        except Exception as e:
+            self._log.error(f"[OFFLINE-LLM] Erreur generation: {e}")
+            return f"[ERREUR] Impossible de generer une reponse: {e}"
 
     def chat(
         self,
@@ -972,16 +1059,21 @@ class OfflineOCR:
         return cls._instance
 
     def __init__(self, model_path: Optional[str] = None, log=None):
+        # Double-check locking pour thread-safety
         if self._initialized:
             return
 
-        self._log = log or logger
-        self.model_path = model_path or OFFLINE_MODELS_CONFIG["ocr"]["path"]
-        self.model = None
-        self.processor = None
-        self.device = None
-        self._model_lock = threading.Lock()
-        self._initialized = True
+        with self._lock:
+            if self._initialized:
+                return
+
+            self._log = log or logger
+            self.model_path = model_path or OFFLINE_MODELS_CONFIG["ocr"]["path"]
+            self.model = None
+            self.processor = None
+            self.device = None
+            self._model_lock = threading.Lock()
+            self._initialized = True
 
     def _ensure_loaded(self):
         """Charge le modele si pas deja fait."""
@@ -1043,53 +1135,68 @@ class OfflineOCR:
         else:
             image = image.convert("RGB")
 
-        with self._model_lock:
-            with torch.no_grad():
-                # Preparer l'image
-                pixel_values = self.processor(
-                    images=image,
-                    return_tensors="pt",
-                ).pixel_values
+        try:
+            with self._model_lock:
+                with torch.no_grad():
+                    # Preparer l'image
+                    pixel_values = self.processor(
+                        images=image,
+                        return_tensors="pt",
+                    ).pixel_values
 
-                pixel_values = pixel_values.to(self.device)
+                    pixel_values = pixel_values.to(self.device)
 
-                # Generer
-                task_prompt = "<s_cord-v2>"
-                decoder_input_ids = self.processor.tokenizer(
-                    task_prompt,
-                    add_special_tokens=False,
-                    return_tensors="pt",
-                ).input_ids.to(self.device)
+                    # Generer
+                    task_prompt = "<s_cord-v2>"
+                    decoder_input_ids = self.processor.tokenizer(
+                        task_prompt,
+                        add_special_tokens=False,
+                        return_tensors="pt",
+                    ).input_ids.to(self.device)
 
-                outputs = self.model.generate(
-                    pixel_values,
-                    decoder_input_ids=decoder_input_ids,
-                    max_length=self.model.decoder.config.max_position_embeddings,
-                    early_stopping=True,
-                    pad_token_id=self.processor.tokenizer.pad_token_id,
-                    eos_token_id=self.processor.tokenizer.eos_token_id,
-                    use_cache=True,
-                    num_beams=1,
-                    bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
-                )
+                    outputs = self.model.generate(
+                        pixel_values,
+                        decoder_input_ids=decoder_input_ids,
+                        max_length=self.model.decoder.config.max_position_embeddings,
+                        early_stopping=True,
+                        pad_token_id=self.processor.tokenizer.pad_token_id,
+                        eos_token_id=self.processor.tokenizer.eos_token_id,
+                        use_cache=True,
+                        num_beams=1,
+                        bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
+                    )
 
-                # Decoder
-                sequence = self.processor.batch_decode(outputs)[0]
-                sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
-                sequence = sequence.replace(self.processor.tokenizer.pad_token, "")
+                    # Decoder
+                    sequence = self.processor.batch_decode(outputs)[0]
+                    sequence = sequence.replace(self.processor.tokenizer.eos_token, "")
+                    sequence = sequence.replace(self.processor.tokenizer.pad_token, "")
 
-                # Parser le resultat JSON si possible
+                    # Parser le resultat JSON si possible
+                    try:
+                        sequence = self.processor.token2json(sequence)
+                        if isinstance(sequence, dict):
+                            # Extraire le texte du JSON
+                            text_parts = []
+                            self._extract_text_from_dict(sequence, text_parts)
+                            return " ".join(text_parts)
+                    except Exception:
+                        pass
+
+                    return sequence.strip()
+
+        except RuntimeError as e:
+            # Gestion CUDA OOM
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                self._log.error(f"[OFFLINE-OCR] CUDA OOM lors de l'OCR: {e}")
                 try:
-                    sequence = self.processor.token2json(sequence)
-                    if isinstance(sequence, dict):
-                        # Extraire le texte du JSON
-                        text_parts = []
-                        self._extract_text_from_dict(sequence, text_parts)
-                        return " ".join(text_parts)
+                    torch.cuda.empty_cache()
                 except Exception:
                     pass
-
-                return sequence.strip()
+                return "[ERREUR] Memoire GPU insuffisante pour l'OCR"
+            raise
+        except Exception as e:
+            self._log.error(f"[OFFLINE-OCR] Erreur extraction texte: {e}")
+            return ""
 
     def _extract_text_from_dict(self, d: Dict, result: List[str]):
         """Extrait recursivement le texte d'un dict."""
@@ -1133,6 +1240,24 @@ def get_offline_ocr(log=None) -> OfflineOCR:
 def cleanup_models():
     """Libere la memoire des modeles charges."""
     import gc
+
+    # Nettoyer explicitement les modeles avant de reset les singletons
+    for cls in [OfflineEmbeddings, OfflineReranker, OfflineLLM, OfflineOCR]:
+        if cls._instance is not None:
+            try:
+                instance = cls._instance
+                # Liberer les attributs du modele
+                if hasattr(instance, 'model') and instance.model is not None:
+                    del instance.model
+                    instance.model = None
+                if hasattr(instance, 'tokenizer') and instance.tokenizer is not None:
+                    del instance.tokenizer
+                    instance.tokenizer = None
+                if hasattr(instance, 'processor') and instance.processor is not None:
+                    del instance.processor
+                    instance.processor = None
+            except Exception as e:
+                logger.warning(f"[OFFLINE] Erreur nettoyage {cls.__name__}: {e}")
 
     # Reset singletons
     OfflineEmbeddings._instance = None
@@ -1359,6 +1484,11 @@ def embed_in_batches_offline(
     if not texts:
         return np.array([], dtype=np.float32).reshape(0, EXPECTED_EMBEDDING_DIMENSION)
 
+    # Valider batch_size pour eviter division par zero ou boucle infinie
+    if batch_size <= 0:
+        _log.warning(f"[OFFLINE-EMB] batch_size invalide ({batch_size}), utilisation de 32")
+        batch_size = 32
+
     try:
         embeddings_client = get_offline_embeddings(log=_log)
     except Exception as e:
@@ -1369,6 +1499,8 @@ def embed_in_batches_offline(
 
     all_embeddings = []
     total_batches = (len(texts) + batch_size - 1) // batch_size
+    failed_batches = 0
+    failed_texts = 0
 
     # Traiter par batchs pour eviter les problemes memoire
     for batch_idx, i in enumerate(range(0, len(texts), batch_size)):
@@ -1395,11 +1527,25 @@ def embed_in_batches_offline(
             )
 
         except Exception as e:
+            failed_batches += 1
+            failed_texts += len(batch)
             _log.error(f"[OFFLINE-EMB] Erreur batch {batch_idx + 1}: {e}")
-            # Continuer avec les autres batchs mais logger l'erreur
-            # Ajouter des embeddings vides pour ce batch
+            # Ajouter des embeddings vides pour ce batch (fallback)
             for _ in batch:
                 all_embeddings.append([0.0] * EXPECTED_EMBEDDING_DIMENSION)
+
+    # Verifier le taux d'echec
+    if failed_batches > 0:
+        failure_rate = failed_texts / len(texts)
+        _log.warning(
+            f"[OFFLINE-EMB] {failed_batches}/{total_batches} batches echoues "
+            f"({failed_texts}/{len(texts)} textes, {failure_rate:.1%})"
+        )
+        # Si plus de 50% des textes ont echoue, lever une exception
+        if failure_rate > 0.5:
+            raise RuntimeError(
+                f"Trop d'erreurs d'embedding: {failed_texts}/{len(texts)} textes echoues ({failure_rate:.1%})"
+            )
 
     result = np.array(all_embeddings, dtype=np.float32)
 
@@ -1440,6 +1586,14 @@ def call_llm_offline(
         Reponse generee
     """
     _log = log or logger
+
+    if not question:
+        _log.warning("[OFFLINE-LLM] Question vide")
+        return "Veuillez poser une question."
+
+    if not context:
+        _log.warning("[OFFLINE-LLM] Contexte vide")
+        context = "Aucun contexte fourni."
 
     llm = get_offline_llm(log=_log)
 
@@ -1504,6 +1658,10 @@ def rerank_offline(
     _log = log or logger
 
     if not sources:
+        return sources
+
+    if not query:
+        _log.warning("[OFFLINE-RR] Query vide, retour sources sans reranking")
         return sources
 
     reranker = get_offline_reranker(log=_log)
