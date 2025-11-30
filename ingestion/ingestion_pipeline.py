@@ -438,15 +438,41 @@ class OptimizedIngestionPipeline:
 
         if LLM_OCR_AVAILABLE:
             try:
-                from ocr.llm_ocr import DALLEM_CONFIG_AVAILABLE
-                print(f"  DALLEM_CONFIG_AVAILABLE: {DALLEM_CONFIG_AVAILABLE}")
-                if DALLEM_CONFIG_AVAILABLE:
-                    from core.models_utils import DALLEM_API_BASE, DALLEM_API_KEY
-                    print(f"  DALLEM_API_BASE: {DALLEM_API_BASE[:50]}...")
-                    print(f"  DALLEM_API_KEY: {'✅ Set' if DALLEM_API_KEY and DALLEM_API_KEY != 'EMPTY' else '❌ Not set'}")
-                    print(f"  ✅ OCR LLM is READY")
+                from ocr.llm_ocr import DALLEM_CONFIG_AVAILABLE, OFFLINE_OCR_AVAILABLE
+                from core.config_manager import is_offline_mode
+
+                offline_mode = is_offline_mode()
+                print(f"  Mode: {'🔒 OFFLINE (local)' if offline_mode else '🌐 ONLINE (DALLEM)'}")
+
+                if offline_mode:
+                    # Mode offline - utiliser Donut-base local
+                    print(f"  OFFLINE_OCR_AVAILABLE: {OFFLINE_OCR_AVAILABLE}")
+                    if OFFLINE_OCR_AVAILABLE:
+                        try:
+                            from core.offline_models import get_offline_ocr
+                            ocr_client = get_offline_ocr()
+                            print(f"  OCR Model: Donut-base (local)")
+                            print(f"  ✅ OCR OFFLINE is READY")
+                        except Exception as e:
+                            print(f"  ⚠️ OCR offline disponible mais non chargé: {e}")
+                            print(f"  💡 Le modèle sera chargé à la demande")
+                    else:
+                        print(f"  ❌ Module OCR offline non disponible")
+                        print(f"     Installez: pip install transformers torch")
                 else:
-                    print(f"  ❌ DALLEM config not available in llm_ocr.py")
+                    # Mode online - utiliser DALLEM
+                    print(f"  DALLEM_CONFIG_AVAILABLE: {DALLEM_CONFIG_AVAILABLE}")
+                    if DALLEM_CONFIG_AVAILABLE:
+                        from core.models_utils import DALLEM_API_BASE, DALLEM_API_KEY
+                        print(f"  DALLEM_API_BASE: {DALLEM_API_BASE[:50]}...")
+                        api_key_ok = DALLEM_API_KEY and DALLEM_API_KEY != 'EMPTY'
+                        print(f"  DALLEM_API_KEY: {'✅ Set' if api_key_ok else '❌ Not set'}")
+                        if api_key_ok:
+                            print(f"  ✅ OCR LLM (DALLEM) is READY")
+                        else:
+                            print(f"  ⚠️ OCR LLM configuré mais API_KEY manquante")
+                    else:
+                        print(f"  ❌ DALLEM config not available in llm_ocr.py")
             except ImportError as e:
                 print(f"  ❌ Import error: {e}")
         else:
