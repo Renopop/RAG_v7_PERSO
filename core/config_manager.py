@@ -7,24 +7,41 @@ Ce module permet de:
 - Valider l'existence des répertoires
 - Proposer la création des répertoires manquants
 - Afficher une interface de configuration si nécessaire
+- Gerer le mode offline avec fallback automatique N:\ -> D:\
 """
 
 import os
 import json
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 
 # Fichier de configuration à la racine du projet
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
 
+# Chemins réseau primaires (N:\)
+PRIMARY_NETWORK_BASE = r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE"
+
+# Chemins locaux de fallback (D:\)
+FALLBACK_LOCAL_BASE = r"D:\FAISS_DATABASE"
+
 # Valeurs par défaut (chemins réseau PROP)
 DEFAULT_CONFIG = {
-    "base_root_dir": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE\BaseDB",
-    "csv_import_dir": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE\CSV_Ingestion",
-    "csv_export_dir": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE\Fichiers_Tracking_CSV",
-    "feedback_dir": r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE\Feedbacks",
+    "base_root_dir": os.path.join(PRIMARY_NETWORK_BASE, "BaseDB"),
+    "csv_import_dir": os.path.join(PRIMARY_NETWORK_BASE, "CSV_Ingestion"),
+    "csv_export_dir": os.path.join(PRIMARY_NETWORK_BASE, "Fichiers_Tracking_CSV"),
+    "feedback_dir": os.path.join(PRIMARY_NETWORK_BASE, "Feedbacks"),
+    "offline_mode": False,
+}
+
+# Configuration fallback pour le mode offline
+FALLBACK_CONFIG = {
+    "base_root_dir": os.path.join(FALLBACK_LOCAL_BASE, "BaseDB"),
+    "csv_import_dir": os.path.join(FALLBACK_LOCAL_BASE, "CSV_Ingestion"),
+    "csv_export_dir": os.path.join(FALLBACK_LOCAL_BASE, "Fichiers_Tracking_CSV"),
+    "feedback_dir": os.path.join(FALLBACK_LOCAL_BASE, "Feedbacks"),
+    "offline_mode": True,
 }
 
 
@@ -35,17 +52,19 @@ class StorageConfig:
     csv_import_dir: str
     csv_export_dir: str
     feedback_dir: str
+    offline_mode: bool = False
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> Dict[str, any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> "StorageConfig":
+    def from_dict(cls, data: Dict[str, any]) -> "StorageConfig":
         return cls(
             base_root_dir=data.get("base_root_dir", DEFAULT_CONFIG["base_root_dir"]),
             csv_import_dir=data.get("csv_import_dir", DEFAULT_CONFIG["csv_import_dir"]),
             csv_export_dir=data.get("csv_export_dir", DEFAULT_CONFIG["csv_export_dir"]),
             feedback_dir=data.get("feedback_dir", DEFAULT_CONFIG["feedback_dir"]),
+            offline_mode=data.get("offline_mode", DEFAULT_CONFIG.get("offline_mode", False)),
         )
 
 
@@ -81,6 +100,157 @@ def save_config(config: StorageConfig) -> bool:
     except IOError as e:
         print(f"[CONFIG] Erreur de sauvegarde du fichier config: {e}")
         return False
+
+
+# =====================================================================
+#  FALLBACK AUTOMATIQUE N:\ -> D:\
+# =====================================================================
+
+def is_network_path_accessible(path: Optional[str] = None) -> bool:
+    """
+    Vérifie si le chemin réseau primaire est accessible.
+
+    Args:
+        path: Chemin à tester (défaut: PRIMARY_NETWORK_BASE)
+
+    Returns:
+        True si le chemin est accessible en lecture
+    """
+    test_path = path or PRIMARY_NETWORK_BASE
+
+    try:
+        # Pour les chemins réseau Windows (N:\, \\server\share)
+        if test_path.startswith(("N:", "n:", r"\\", "//")):
+            return os.path.exists(test_path) and os.access(test_path, os.R_OK)
+        return os.path.exists(test_path) and os.access(test_path, os.R_OK)
+    except (OSError, PermissionError, Exception) as e:
+        print(f"[CONFIG] Chemin réseau inaccessible ({test_path}): {e}")
+        return False
+
+
+def get_effective_paths(force_offline: bool = False) -> Dict[str, str]:
+    """
+    Retourne les chemins effectifs avec fallback automatique.
+
+    Si le chemin réseau N:\ n'est pas accessible, utilise D:\ automatiquement.
+
+    Args:
+        force_offline: Si True, utilise toujours les chemins locaux
+
+    Returns:
+        Dict avec les chemins effectifs
+    """
+    config = load_config()
+
+    # Mode offline forcé
+    if force_offline or config.offline_mode:
+        print("[CONFIG] Mode offline actif - utilisation des chemins locaux (D:\\)")
+        return {
+            "base_root_dir": FALLBACK_CONFIG["base_root_dir"],
+            "csv_import_dir": FALLBACK_CONFIG["csv_import_dir"],
+            "csv_export_dir": FALLBACK_CONFIG["csv_export_dir"],
+            "feedback_dir": FALLBACK_CONFIG["feedback_dir"],
+            "using_fallback": True,
+            "offline_mode": True,
+        }
+
+    # Tester l'accessibilité du chemin réseau
+    if is_network_path_accessible(config.base_root_dir):
+        print(f"[CONFIG] Chemin réseau accessible: {config.base_root_dir}")
+        return {
+            "base_root_dir": config.base_root_dir,
+            "csv_import_dir": config.csv_import_dir,
+            "csv_export_dir": config.csv_export_dir,
+            "feedback_dir": config.feedback_dir,
+            "using_fallback": False,
+            "offline_mode": False,
+        }
+
+    # Fallback automatique vers D:\
+    print(f"[CONFIG] Chemin réseau inaccessible, fallback vers D:\\")
+
+    # Vérifier que le fallback existe
+    if not os.path.exists(FALLBACK_LOCAL_BASE):
+        try:
+            os.makedirs(FALLBACK_LOCAL_BASE, exist_ok=True)
+            print(f"[CONFIG] Création du répertoire fallback: {FALLBACK_LOCAL_BASE}")
+        except Exception as e:
+            print(f"[CONFIG] Impossible de créer le répertoire fallback: {e}")
+
+    return {
+        "base_root_dir": FALLBACK_CONFIG["base_root_dir"],
+        "csv_import_dir": FALLBACK_CONFIG["csv_import_dir"],
+        "csv_export_dir": FALLBACK_CONFIG["csv_export_dir"],
+        "feedback_dir": FALLBACK_CONFIG["feedback_dir"],
+        "using_fallback": True,
+        "offline_mode": False,  # Fallback automatique, pas mode offline explicite
+    }
+
+
+def set_offline_mode(enabled: bool) -> bool:
+    """
+    Active ou désactive le mode offline.
+
+    Args:
+        enabled: True pour activer, False pour désactiver
+
+    Returns:
+        True si la configuration a été sauvegardée
+    """
+    config = load_config()
+    config.offline_mode = enabled
+
+    if enabled:
+        # En mode offline, utiliser les chemins locaux
+        config.base_root_dir = FALLBACK_CONFIG["base_root_dir"]
+        config.csv_import_dir = FALLBACK_CONFIG["csv_import_dir"]
+        config.csv_export_dir = FALLBACK_CONFIG["csv_export_dir"]
+        config.feedback_dir = FALLBACK_CONFIG["feedback_dir"]
+        print("[CONFIG] Mode offline activé - chemins locaux configurés")
+    else:
+        # En mode online, revenir aux chemins réseau
+        config.base_root_dir = DEFAULT_CONFIG["base_root_dir"]
+        config.csv_import_dir = DEFAULT_CONFIG["csv_import_dir"]
+        config.csv_export_dir = DEFAULT_CONFIG["csv_export_dir"]
+        config.feedback_dir = DEFAULT_CONFIG["feedback_dir"]
+        print("[CONFIG] Mode online activé - chemins réseau configurés")
+
+    return save_config(config)
+
+
+def is_offline_mode() -> bool:
+    """
+    Vérifie si le mode offline est activé.
+
+    Returns:
+        True si mode offline, False sinon
+    """
+    config = load_config()
+    return config.offline_mode
+
+
+def ensure_fallback_directories() -> Tuple[bool, List[str]]:
+    """
+    S'assure que les répertoires fallback (D:\) existent.
+
+    Returns:
+        Tuple (succès, liste des erreurs)
+    """
+    errors = []
+    directories = [
+        FALLBACK_CONFIG["base_root_dir"],
+        FALLBACK_CONFIG["csv_import_dir"],
+        FALLBACK_CONFIG["csv_export_dir"],
+        FALLBACK_CONFIG["feedback_dir"],
+    ]
+
+    for dir_path in directories:
+        try:
+            os.makedirs(dir_path, exist_ok=True)
+        except Exception as e:
+            errors.append(f"Impossible de créer {dir_path}: {e}")
+
+    return len(errors) == 0, errors
 
 
 def validate_directory(path: str) -> Tuple[bool, str]:
@@ -353,21 +523,81 @@ def check_and_show_config_if_needed() -> Optional[StorageConfig]:
 #  COMPATIBILITÉ AVEC L'ANCIENNE INTERFACE
 # =====================================================================
 
-def get_base_root_dir() -> str:
-    """Retourne le répertoire des bases FAISS."""
+def get_base_root_dir(use_fallback: bool = True) -> str:
+    """
+    Retourne le répertoire des bases FAISS.
+
+    Args:
+        use_fallback: Si True, utilise le fallback automatique si réseau inaccessible
+
+    Returns:
+        Chemin du répertoire des bases FAISS
+    """
+    if use_fallback:
+        paths = get_effective_paths()
+        return paths["base_root_dir"]
     return load_config().base_root_dir
 
 
-def get_csv_import_dir() -> str:
-    """Retourne le répertoire des CSV d'ingestion."""
+def get_csv_import_dir(use_fallback: bool = True) -> str:
+    """
+    Retourne le répertoire des CSV d'ingestion.
+
+    Args:
+        use_fallback: Si True, utilise le fallback automatique si réseau inaccessible
+    """
+    if use_fallback:
+        paths = get_effective_paths()
+        return paths["csv_import_dir"]
     return load_config().csv_import_dir
 
 
-def get_csv_export_dir() -> str:
-    """Retourne le répertoire des CSV de tracking."""
+def get_csv_export_dir(use_fallback: bool = True) -> str:
+    """
+    Retourne le répertoire des CSV de tracking.
+
+    Args:
+        use_fallback: Si True, utilise le fallback automatique si réseau inaccessible
+    """
+    if use_fallback:
+        paths = get_effective_paths()
+        return paths["csv_export_dir"]
     return load_config().csv_export_dir
 
 
-def get_feedback_dir() -> str:
-    """Retourne le répertoire des feedbacks."""
+def get_feedback_dir(use_fallback: bool = True) -> str:
+    """
+    Retourne le répertoire des feedbacks.
+
+    Args:
+        use_fallback: Si True, utilise le fallback automatique si réseau inaccessible
+    """
+    if use_fallback:
+        paths = get_effective_paths()
+        return paths["feedback_dir"]
     return load_config().feedback_dir
+
+
+def get_storage_status() -> Dict[str, any]:
+    """
+    Retourne le statut complet du stockage.
+
+    Returns:
+        Dict avec informations sur les chemins et leur accessibilité
+    """
+    config = load_config()
+    effective = get_effective_paths()
+
+    return {
+        "config": {
+            "base_root_dir": config.base_root_dir,
+            "csv_import_dir": config.csv_import_dir,
+            "csv_export_dir": config.csv_export_dir,
+            "feedback_dir": config.feedback_dir,
+            "offline_mode": config.offline_mode,
+        },
+        "effective": effective,
+        "network_accessible": is_network_path_accessible(),
+        "fallback_base": FALLBACK_LOCAL_BASE,
+        "primary_base": PRIMARY_NETWORK_BASE,
+    }

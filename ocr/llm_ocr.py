@@ -10,6 +10,7 @@ Fonctionnalités:
 - Extraction de texte structuré
 - Mode fallback automatique si OCR classique échoue
 - Support natif de l'API DALLEM
+- Mode OFFLINE avec Donut-base local
 """
 
 import os
@@ -21,6 +22,23 @@ from typing import List, Dict, Any, Optional, Tuple, Callable
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Import du gestionnaire de configuration pour le mode offline
+try:
+    from core.config_manager import is_offline_mode
+    CONFIG_MANAGER_AVAILABLE = True
+except ImportError:
+    CONFIG_MANAGER_AVAILABLE = False
+    def is_offline_mode():
+        return False
+
+# Import de l'OCR offline (Donut-base)
+OFFLINE_OCR_AVAILABLE = False
+try:
+    from core.offline_models import get_offline_ocr, OfflineOCR
+    OFFLINE_OCR_AVAILABLE = True
+except ImportError:
+    pass
 
 # =============================================================================
 #  IMPORT CONFIGURATION DALLEM (optionnel)
@@ -1291,3 +1309,290 @@ def check_dallem_vision_available(log=None) -> bool:
         model=LLM_MODEL,
         log=_log
     )
+
+
+# =============================================================================
+#  MODE OFFLINE - OCR AVEC DONUT-BASE LOCAL
+# =============================================================================
+
+def ocr_image_offline(
+    image_bytes: bytes,
+    log=None
+) -> Tuple[str, float]:
+    """
+    Extrait le texte d'une image en mode offline avec Donut-base.
+
+    Args:
+        image_bytes: Image en bytes (PNG)
+        log: Logger
+
+    Returns:
+        (texte extrait, estimation de confiance)
+    """
+    _log = log or logger
+
+    if not OFFLINE_OCR_AVAILABLE:
+        _log.error("[OFFLINE-OCR] Module offline non disponible")
+        return "", 0.0
+
+    try:
+        from PIL import Image
+        import io
+
+        # Convertir les bytes en image PIL
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        # Obtenir le client OCR offline
+        ocr_client = get_offline_ocr(log=_log)
+
+        # Extraire le texte
+        text = ocr_client.extract_text(image)
+
+        # Estimer la confiance
+        confidence = _estimate_ocr_confidence(text)
+
+        _log.debug(f"[OFFLINE-OCR] Texte extrait: {len(text)} chars, confiance: {confidence:.0%}")
+
+        return text, confidence
+
+    except Exception as e:
+        _log.error(f"[OFFLINE-OCR] Erreur: {e}")
+        return "", 0.0
+
+
+def ocr_pdf_offline(
+    pdf_path: str,
+    pages: Optional[List[int]] = None,
+    dpi: int = DEFAULT_DPI,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+    log=None
+) -> DocumentOCRResult:
+    """
+    OCR d'un PDF complet en mode offline avec Donut-base.
+
+    Args:
+        pdf_path: Chemin du fichier PDF
+        pages: Liste des pages a traiter (None = toutes)
+        dpi: Resolution pour la conversion
+        progress_cb: Callback de progression
+        log: Logger
+
+    Returns:
+        DocumentOCRResult avec le texte extrait
+    """
+    _log = log or logger
+    start_time = time.time()
+
+    if not OFFLINE_OCR_AVAILABLE:
+        return DocumentOCRResult(
+            total_pages=0,
+            processed_pages=0,
+            full_text="",
+            page_results=[],
+            total_time=0,
+            avg_confidence=0,
+            errors=["Module OCR offline non disponible"]
+        )
+
+    # Obtenir le nombre de pages
+    total_pages = get_pdf_page_count(pdf_path, log=_log)
+
+    if total_pages == 0:
+        return DocumentOCRResult(
+            total_pages=0,
+            processed_pages=0,
+            full_text="",
+            page_results=[],
+            total_time=0,
+            avg_confidence=0,
+            errors=["Impossible de lire le PDF"]
+        )
+
+    # Determiner les pages a traiter
+    if pages is None:
+        pages_to_process = list(range(total_pages))
+    else:
+        pages_to_process = [p for p in pages if 0 <= p < total_pages]
+
+    # Affichage
+    filename = os.path.basename(pdf_path)
+    print(f"\n{'='*60}")
+    print(f"OCR OFFLINE (Donut-base) - DEMARRAGE")
+    print(f"{'='*60}")
+    print(f"  Fichier: {filename}")
+    print(f"  Pages a traiter: {len(pages_to_process)}/{total_pages}")
+    print(f"{'─'*60}")
+
+    _log.info(f"[OFFLINE-OCR] Demarrage: {len(pages_to_process)}/{total_pages} pages")
+
+    page_results: List[OCRResult] = []
+    errors: List[str] = []
+    all_texts: List[str] = []
+
+    for i, page_num in enumerate(pages_to_process):
+        page_start = time.time()
+
+        # Callback de progression
+        if progress_cb:
+            progress = (i + 1) / len(pages_to_process)
+            progress_cb(progress, f"OCR page {page_num + 1}/{total_pages}")
+
+        _log.info(f"[OFFLINE-OCR] Page {page_num + 1}/{total_pages}...")
+
+        # Convertir la page en image
+        image_bytes = pdf_page_to_image(pdf_path, page_num, dpi=dpi, log=_log)
+
+        if not image_bytes:
+            error_msg = f"Erreur conversion page {page_num + 1}"
+            errors.append(error_msg)
+            page_results.append(OCRResult(
+                page_number=page_num + 1,
+                text="",
+                confidence=0.0,
+                processing_time=time.time() - page_start,
+                error=error_msg
+            ))
+            continue
+
+        # OCR offline
+        text, confidence = ocr_image_offline(image_bytes, log=_log)
+
+        processing_time = time.time() - page_start
+
+        if text:
+            all_texts.append(f"--- Page {page_num + 1} ---\n{text}")
+            page_results.append(OCRResult(
+                page_number=page_num + 1,
+                text=text,
+                confidence=confidence,
+                processing_time=processing_time
+            ))
+            _log.info(
+                f"[OFFLINE-OCR] Page {page_num + 1}: {len(text)} chars, "
+                f"confiance={confidence:.0%}, temps={processing_time:.1f}s"
+            )
+        else:
+            error_msg = f"OCR echoue page {page_num + 1}"
+            errors.append(error_msg)
+            page_results.append(OCRResult(
+                page_number=page_num + 1,
+                text="",
+                confidence=0.0,
+                processing_time=processing_time,
+                error=error_msg
+            ))
+
+    # Statistiques
+    total_time = time.time() - start_time
+    processed_pages = sum(1 for r in page_results if r.text)
+    confidences = [r.confidence for r in page_results if r.confidence > 0]
+    avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+
+    # Assembler le texte complet
+    full_text = "\n\n".join(all_texts)
+
+    # Affichage final
+    print(f"{'─'*60}")
+    print(f"OCR OFFLINE TERMINE")
+    print(f"  Pages traitees: {processed_pages}/{len(pages_to_process)}")
+    print(f"  Confiance moyenne: {avg_confidence:.0%}")
+    print(f"  Temps total: {total_time:.1f}s")
+    print(f"{'='*60}\n")
+
+    return DocumentOCRResult(
+        total_pages=total_pages,
+        processed_pages=processed_pages,
+        full_text=full_text,
+        page_results=page_results,
+        total_time=total_time,
+        avg_confidence=avg_confidence,
+        errors=errors
+    )
+
+
+def smart_ocr_auto(
+    pdf_path: str,
+    quality_threshold: float = 0.5,
+    fallback_pages_only: bool = True,
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+    force_offline: bool = False,
+    log=None
+) -> Dict[str, Any]:
+    """
+    OCR intelligent avec selection automatique online/offline.
+
+    Detecte le mode actuel et utilise:
+    - Mode OFFLINE: Donut-base local
+    - Mode ONLINE: DALLEM Vision API
+
+    Args:
+        pdf_path: Chemin du PDF
+        quality_threshold: Seuil de qualite (0-1)
+        fallback_pages_only: Si True, ne traite que les pages de mauvaise qualite
+        progress_cb: Callback de progression
+        force_offline: Si True, force le mode offline
+        log: Logger
+
+    Returns:
+        Dict avec texte et metadonnees
+    """
+    _log = log or logger
+
+    # Determiner le mode
+    offline_mode = force_offline or (CONFIG_MANAGER_AVAILABLE and is_offline_mode())
+
+    if offline_mode and OFFLINE_OCR_AVAILABLE:
+        _log.info("[OCR] Mode OFFLINE actif - utilisation Donut-base local")
+
+        # Utiliser l'OCR offline
+        result = ocr_pdf_offline(
+            pdf_path=pdf_path,
+            progress_cb=progress_cb,
+            log=_log
+        )
+
+        return {
+            "text": result.full_text,
+            "method": "offline_donut",
+            "quality_score": result.avg_confidence,
+            "llm_ocr_used": True,
+            "llm_ocr_confidence": result.avg_confidence,
+            "pages_ocr": result.processed_pages,
+            "total_pages": result.total_pages,
+            "ocr_time": result.total_time,
+            "ocr_errors": result.errors,
+            "offline_mode": True,
+        }
+
+    # Mode online
+    if DALLEM_CONFIG_AVAILABLE:
+        _log.info("[OCR] Mode ONLINE - utilisation DALLEM Vision")
+        return smart_ocr_with_dallem(
+            pdf_path=pdf_path,
+            quality_threshold=quality_threshold,
+            fallback_pages_only=fallback_pages_only,
+            progress_cb=progress_cb,
+            log=_log
+        )
+
+    # Aucun mode disponible
+    _log.error("[OCR] Aucun mode OCR disponible (ni offline ni online)")
+    return {
+        "text": "",
+        "method": "none",
+        "error": "Aucun mode OCR disponible",
+    }
+
+
+def check_ocr_available() -> Dict[str, bool]:
+    """
+    Verifie la disponibilite des modes OCR.
+
+    Returns:
+        Dict avec statut de chaque mode
+    """
+    return {
+        "online": DALLEM_CONFIG_AVAILABLE,
+        "offline": OFFLINE_OCR_AVAILABLE,
+        "current_mode": "offline" if (CONFIG_MANAGER_AVAILABLE and is_offline_mode()) else "online",
+    }

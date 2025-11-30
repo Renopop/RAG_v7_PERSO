@@ -1,21 +1,23 @@
-# Système RAG avec FAISS et Streamlit
+# Systeme RAG avec FAISS et Streamlit
+# =====================================
 
 # Interface web Streamlit
 streamlit>=1.28.0
 
-# Interface GUI pour création de CSV (CustomTkinter)
+# Interface GUI pour creation de CSV (CustomTkinter)
 customtkinter>=5.2.0
 
-# Base de données vectorielle - FAISS
+# Base de donnees vectorielle - FAISS
 faiss-cpu>=1.7.4
 # Note: utilisez faiss-gpu si vous avez un GPU CUDA disponible
 
 # Traitement de documents
 pdfminer.six>=20221105
 pymupdf>=1.24.0  # Fallback pour extraction PDF robuste
-pdfplumber>=0.10.0  # Extraction améliorée des tableaux PDF
+pdfplumber>=0.10.0  # Extraction amelioree des tableaux PDF
 python-docx>=0.8.11
-pywin32>=306; sys_platform == "win32"  # Conversion .doc → .docx via Microsoft Word
+pywin32>=306; sys_platform == "win32"  # Conversion .doc -> .docx via Microsoft Word
+Pillow>=10.0.0  # Traitement images pour OCR
 
 # Traitement de texte
 langdetect>=1.0.9
@@ -23,7 +25,7 @@ unidecode>=1.3.6
 chardet>=5.1.0
 beautifulsoup4>=4.12.0  # Parsing HTML (Confluence)
 
-# API et modèles (Snowflake Arctic + DALLEM)
+# API et modeles (Snowflake Arctic + DALLEM)
 openai>=1.0.0
 httpx>=0.24.0
 requests>=2.31.0  # Fallback pour appels HTTP
@@ -31,4 +33,30 @@ requests>=2.31.0  # Fallback pour appels HTTP
 # Utilitaires
 numpy>=1.24.0
 packaging>=23.0
-psutil>=5.9.0  # Détection RAM pour auto-configuration mémoire
+psutil>=5.9.0  # Detection RAM pour auto-configuration memoire
+tqdm>=4.65.0  # Barres de progression
+
+# =====================================
+# MODE OFFLINE - Dependencies optionnelles
+# =====================================
+# Ces packages sont necessaires uniquement pour le mode offline
+# Installez-les avec: pip install -r requirements-offline.txt
+
+# PyTorch avec support CUDA (installer separement selon votre GPU)
+# Voir: https://pytorch.org/get-started/locally/
+# Pour CUDA 11.8: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# Pour CUDA 12.1: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Pour CPU only:  pip install torch torchvision torchaudio
+
+# Transformers et modeles locaux
+transformers>=4.35.0
+accelerate>=0.24.0
+sentencepiece>=0.1.99
+safetensors>=0.4.0
+tokenizers>=0.14.0
+
+# Quantification pour GPU avec VRAM limitee (optionnel)
+# bitsandbytes>=0.41.0  # Decommenter si vous voulez la quantification 4-bit/8-bit
+
+# Scipy pour calculs scientifiques
+scipy>=1.11.0
