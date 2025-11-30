@@ -731,12 +731,16 @@ if is_admin:
                         st.warning("🖥️ GPU: Non disponible (mode CPU)")
 
                     # Modeles
-                    models_status = offline_status.get("models", {})
-                    if models_status:
+                    models_details = offline_status.get("models_details", {})
+                    if models_details:
                         st.markdown("**Modeles locaux:**")
-                        for model, available in models_status.items():
+                        for model_key, info in models_details.items():
+                            available = info.get("available", False)
+                            name = info.get("name", model_key)
+                            path = info.get("path", "N/A")
                             icon = "✅" if available else "❌"
-                            st.caption(f"{icon} {model}")
+                            st.caption(f"{icon} **{model_key.upper()}**: {name}")
+                            st.caption(f"   📁 {path}")
 
                     # Stockage
                     storage = offline_status.get("storage", {})

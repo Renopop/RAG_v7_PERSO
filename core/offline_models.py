@@ -1699,6 +1699,17 @@ def get_offline_status() -> Dict[str, Any]:
     models_status = check_offline_models_available()
     storage_path = get_storage_path()
 
+    # Enrichir les infos modeles avec noms et chemins
+    models_details = {}
+    for model_key, available in models_status.items():
+        config = OFFLINE_MODELS_CONFIG.get(model_key, {})
+        models_details[model_key] = {
+            "available": available,
+            "name": config.get("name", model_key),
+            "path": config.get("path", "N/A"),
+            "type": config.get("type", "unknown"),
+        }
+
     return {
         "gpu": {
             "available": gpu_info.available,
@@ -1709,6 +1720,7 @@ def get_offline_status() -> Dict[str, Any]:
             "tier": gpu_info.tier.value,
         },
         "models": models_status,
+        "models_details": models_details,
         "storage": {
             "active_path": storage_path,
             "primary_accessible": _is_path_accessible(STORAGE_PATHS["primary"]),
