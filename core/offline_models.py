@@ -383,7 +383,7 @@ class OfflineEmbeddings:
             self.model = None
             self.tokenizer = None
             self.device = None
-            self.dimension = 1024
+            self.dimension = OFFLINE_MODELS_CONFIG["embeddings"].get("dimension", 1024)
             self._model_lock = threading.Lock()
             self._initialized = True
 
@@ -1582,6 +1582,14 @@ def call_llm_offline(
     """
     _log = log or logger
 
+    if not question:
+        _log.warning("[OFFLINE-LLM] Question vide")
+        return "Veuillez poser une question."
+
+    if not context:
+        _log.warning("[OFFLINE-LLM] Contexte vide")
+        context = "Aucun contexte fourni."
+
     llm = get_offline_llm(log=_log)
 
     system_msg = (
@@ -1645,6 +1653,10 @@ def rerank_offline(
     _log = log or logger
 
     if not sources:
+        return sources
+
+    if not query:
+        _log.warning("[OFFLINE-RR] Query vide, retour sources sans reranking")
         return sources
 
     reranker = get_offline_reranker(log=_log)

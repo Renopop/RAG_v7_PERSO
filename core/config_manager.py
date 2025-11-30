@@ -289,10 +289,10 @@ def validate_directory(path: str) -> Tuple[bool, str]:
     # Vérifier les permissions d'écriture
     try:
         test_file = os.path.join(path, ".write_test_temp")
-        with open(test_file, "w") as f:
+        with open(test_file, "w", encoding="utf-8") as f:
             f.write("test")
         os.remove(test_file)
-    except (IOError, PermissionError) as e:
+    except (IOError, PermissionError, OSError) as e:
         return False, f"Pas de permission d'écriture: {path}"
 
     return True, "OK"
