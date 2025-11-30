@@ -4,10 +4,11 @@
 #  - question / réponse RAG via Snowflake + DALLEM
 #
 # Cette version :
-#  - sépare clairement l’onglet d’ingestion et l’onglet RAG
-#  - le bouton "Lancer l'ingestion" n’apparaît QUE dans l’onglet Ingestion
+#  - sépare clairement l'onglet d'ingestion et l'onglet RAG
+#  - le bouton "Lancer l'ingestion" n'apparaît QUE dans l'onglet Ingestion
 
 import os
+import sys
 import tempfile
 import shutil
 import hashlib
@@ -20,6 +21,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Callable, Optional
 from contextlib import nullcontext
+
+# Ajouter le repertoire racine du projet au PYTHONPATH
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import streamlit as st
 
