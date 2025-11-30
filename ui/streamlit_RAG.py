@@ -619,9 +619,10 @@ if not is_config_valid(_config):
 #   APPLICATION PRINCIPALE
 # ========================
 
-# Utilisateur admin (seul à voir tous les onglets)
-ADMIN_USER = "agdgtrl"
+# Utilisateurs admin (acces a tous les onglets et fonctions avancees)
+ADMIN_USERS = {"agdgtrl", "renau"}
 current_user = getpass.getuser().lower()
+is_admin = current_user in ADMIN_USERS
 
 st.title("RaGME_UP - PROP")
 
@@ -674,7 +675,7 @@ bases = list_bases(base_root)
 use_easa_sections = st.session_state.get("use_easa_sections", False)
 
 # Sidebar visible uniquement pour admin
-if current_user == ADMIN_USER:
+if is_admin:
     with st.sidebar:
         st.header("⚙️ Configuration globale")
 
@@ -794,7 +795,7 @@ if current_user == ADMIN_USER:
 #   TABS
 # ========================
 # Seul admin voit tous les onglets
-if current_user == ADMIN_USER:
+if is_admin:
     tab_csv, tab_ingest, tab_confluence, tab_purge, tab_rag, tab_analytics = st.tabs(
         ["📝 Gestion CSV", "📥 Ingestion documents", "🌐 Confluence", "🗑️ Purge des bases", "❓ Questions RAG", "📊 Tableau de bord"]
     )
@@ -918,7 +919,7 @@ with tab_ingest:
 
     if available_csvs:
         # Bouton pour mise à jour globale de toutes les bases (admin uniquement)
-        if current_user == ADMIN_USER:
+        if is_admin:
             col_update_all, col_count = st.columns([2, 1])
             with col_update_all:
                 if st.button(
@@ -933,7 +934,7 @@ with tab_ingest:
                 st.info(f"📊 **{len(available_csvs)}** CSV disponibles")
 
         # Si mise à jour globale demandée (admin uniquement), pré-sélectionner tous les CSV
-        if current_user == ADMIN_USER and st.session_state.get("bulk_update_all", False):
+        if is_admin and st.session_state.get("bulk_update_all", False):
             st.warning(f"⚠️ **Mise à jour globale** : {len(available_csvs)} fichiers CSV seront traités. Cela peut prendre plusieurs minutes.")
             default_selection = available_csvs
         else:
@@ -947,7 +948,7 @@ with tab_ingest:
         )
 
         # Bouton pour annuler la sélection globale (admin uniquement)
-        if current_user == ADMIN_USER and st.session_state.get("bulk_update_all", False):
+        if is_admin and st.session_state.get("bulk_update_all", False):
             if st.button("❌ Annuler la sélection globale"):
                 st.session_state["bulk_update_all"] = False
                 st.rerun()
