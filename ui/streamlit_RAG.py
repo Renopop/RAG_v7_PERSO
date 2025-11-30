@@ -38,7 +38,32 @@ from core.config_manager import (
     StorageConfig,
     validate_all_directories,
     create_directory,
+    is_offline_mode,
+    set_offline_mode,
+    get_effective_paths,
+    is_network_path_accessible,
 )
+
+# Import du module offline pour le statut
+try:
+    from core.offline_models import (
+        get_offline_status,
+        check_offline_models_available,
+        detect_gpu,
+        GPUInfo,
+    )
+    OFFLINE_MODULE_AVAILABLE = True
+except ImportError:
+    OFFLINE_MODULE_AVAILABLE = False
+    def get_offline_status():
+        return {"ready": False, "gpu": {"available": False}}
+    def check_offline_models_available():
+        return {}
+    def detect_gpu():
+        return None
+
+# Import pour le statut des modeles
+from core.models_utils import get_current_mode, is_offline_available, get_models_status
 from processing.xml_processing import (
     XMLParseConfig,
     SectionPattern,
@@ -647,27 +672,116 @@ if current_user == ADMIN_USER:
     with st.sidebar:
         st.header("⚙️ Configuration globale")
 
-        base_root = BASE_ROOT_DIR
-        st.warning(
-            f"📁 Bases FAISS : `{BASE_ROOT_DIR}`"
+        # =====================================================
+        # MODE OFFLINE - Checkbox principal
+        # =====================================================
+        st.markdown("### 🔌 Mode de fonctionnement")
+
+        # Initialiser l'etat du mode offline dans session_state
+        if "offline_mode_enabled" not in st.session_state:
+            st.session_state.offline_mode_enabled = is_offline_mode()
+
+        # Verifier si le mode offline est disponible
+        offline_available = OFFLINE_MODULE_AVAILABLE and is_offline_available()
+
+        # Checkbox pour activer/desactiver le mode offline
+        new_offline_state = st.checkbox(
+            "🔌 Mode OFFLINE (modeles locaux)",
+            value=st.session_state.offline_mode_enabled,
+            disabled=not offline_available,
+            help="Active l'utilisation des modeles IA locaux sans connexion internet"
         )
-        st.warning(
-            f"📝 CSV d'ingestion : `{CSV_IMPORT_DIR}`"
-        )
-        st.warning(
-            f"📊 CSV de tracking : `{CSV_EXPORT_DIR}`"
-        )
-        bases = list_bases(base_root)
-        if bases:
-            st.success(f"✅ {len(bases)} base(s) trouvée(s) sous {base_root}")
+
+        # Si l'etat a change, mettre a jour la configuration
+        if new_offline_state != st.session_state.offline_mode_enabled:
+            st.session_state.offline_mode_enabled = new_offline_state
+            set_offline_mode(new_offline_state)
+            st.rerun()  # Recharger pour appliquer les changements
+
+        # Afficher le statut du mode
+        if st.session_state.offline_mode_enabled:
+            st.success("🔌 Mode OFFLINE actif")
+            st.caption("Utilisation des modeles locaux")
         else:
-            st.info("ℹ️ Aucune base trouvée sous ce dossier pour l'instant.")
+            st.info("🌐 Mode ONLINE actif")
+            st.caption("Utilisation des APIs distantes")
+
+        # Afficher les informations GPU si disponible
+        if OFFLINE_MODULE_AVAILABLE:
+            with st.expander("📊 Statut mode offline", expanded=False):
+                try:
+                    offline_status = get_offline_status()
+
+                    # GPU
+                    gpu_info = offline_status.get("gpu", {})
+                    if gpu_info.get("available"):
+                        st.success(f"🎮 GPU: {gpu_info.get('device', 'N/A')}")
+                        vram_total = gpu_info.get('vram_total_gb', 0)
+                        vram_free = gpu_info.get('vram_free_gb', 0)
+                        st.caption(f"VRAM: {vram_free:.1f}/{vram_total:.1f} GB")
+                        st.caption(f"Tier: {gpu_info.get('tier', 'N/A')}")
+                    else:
+                        st.warning("🖥️ GPU: Non disponible (mode CPU)")
+
+                    # Modeles
+                    models_status = offline_status.get("models", {})
+                    if models_status:
+                        st.markdown("**Modeles locaux:**")
+                        for model, available in models_status.items():
+                            icon = "✅" if available else "❌"
+                            st.caption(f"{icon} {model}")
+
+                    # Stockage
+                    storage = offline_status.get("storage", {})
+                    if storage:
+                        st.markdown("**Stockage:**")
+                        if storage.get("primary_accessible"):
+                            st.caption("✅ N:\\ accessible")
+                        else:
+                            st.caption("❌ N:\\ inaccessible")
+                            st.caption("➡️ Fallback D:\\")
+
+                except Exception as e:
+                    st.error(f"Erreur: {e}")
+        else:
+            if not offline_available:
+                st.warning("⚠️ Mode offline non disponible")
+                st.caption("Installez les dependances offline")
 
         st.markdown("---")
 
-        st.markdown("### 🤖 Modèles utilisés")
-        st.caption(f"🔹 Embeddings : **Snowflake** – `{EMBED_MODEL}`")
-        st.caption(f"🔹 LLM : **DALLEM** – `{LLM_MODEL}`")
+        # Chemins effectifs (avec fallback automatique)
+        effective_paths = get_effective_paths()
+        base_root = effective_paths.get("base_root_dir", BASE_ROOT_DIR)
+
+        if effective_paths.get("using_fallback"):
+            st.warning("⚠️ Stockage en mode FALLBACK (D:\\)")
+
+        st.info(
+            f"📁 Bases FAISS : `{base_root}`"
+        )
+        st.info(
+            f"📝 CSV d'ingestion : `{effective_paths.get('csv_import_dir', CSV_IMPORT_DIR)}`"
+        )
+        st.info(
+            f"📊 CSV de tracking : `{effective_paths.get('csv_export_dir', CSV_EXPORT_DIR)}`"
+        )
+        bases = list_bases(base_root)
+        if bases:
+            st.success(f"✅ {len(bases)} base(s) trouvee(s)")
+        else:
+            st.info("ℹ️ Aucune base trouvee pour l'instant.")
+
+        st.markdown("---")
+
+        st.markdown("### 🤖 Modeles utilises")
+        if st.session_state.get("offline_mode_enabled"):
+            st.caption("🔹 Embeddings : **BGE-M3** (local)")
+            st.caption("🔹 LLM : **Mistral-7B** (local)")
+            st.caption("🔹 Reranker : **BGE-Reranker** (local)")
+        else:
+            st.caption(f"🔹 Embeddings : **Snowflake** – `{EMBED_MODEL}`")
+            st.caption(f"🔹 LLM : **DALLEM** – `{LLM_MODEL}`")
 
 
 # ========================

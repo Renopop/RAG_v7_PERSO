@@ -1,10 +1,19 @@
 # models_utils.py
+"""
+Module de gestion des modeles et APIs pour le RAG.
+
+Supporte deux modes:
+- Mode ONLINE: Utilise les APIs distantes (DALLEM, Snowflake)
+- Mode OFFLINE: Utilise les modeles locaux (Mistral, BGE-M3)
+
+Le mode est determine automatiquement via config_manager.is_offline_mode()
+"""
 import os
 import sys
 import math
 import time
 import traceback
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 
@@ -15,6 +24,32 @@ from logging import Logger
 
 from openai import OpenAI
 import openai
+
+# Import du gestionnaire de configuration pour le mode offline
+try:
+    from core.config_manager import is_offline_mode, get_effective_paths
+    CONFIG_MANAGER_AVAILABLE = True
+except ImportError:
+    CONFIG_MANAGER_AVAILABLE = False
+    def is_offline_mode():
+        return False
+    def get_effective_paths():
+        return {}
+
+# Import des modeles offline (lazy import pour eviter les dependances)
+OFFLINE_MODELS_AVAILABLE = False
+try:
+    from core.offline_models import (
+        embed_in_batches_offline,
+        call_llm_offline,
+        rerank_offline,
+        get_offline_status,
+        get_offline_embeddings,
+        get_offline_llm,
+    )
+    OFFLINE_MODELS_AVAILABLE = True
+except ImportError:
+    pass
 
 
 # ---------------------------------------------------------------------
@@ -333,15 +368,41 @@ def embed_in_batches(
     log: Logger,
     dry_run: bool = False,
     use_parallel: bool = True,
+    force_offline: bool = False,
 ) -> np.ndarray:
     """
     Découpe en batches, appelle le client embeddings, normalise les vecteurs (L2).
     Tronque automatiquement les textes trop longs pour éviter les erreurs de tokens.
 
+    Supporte le mode offline automatique via config_manager.
+
     Args:
+        texts: Liste de textes a encoder
+        role: "query" ou "passage"
+        batch_size: Taille des batches
+        emb_client: Client embeddings (ignore en mode offline)
+        log: Logger
+        dry_run: Si True, genere des embeddings aleatoires
         use_parallel: Si True, utilise le traitement parallèle (multicoeur).
                      Si erreur, fallback automatique sur séquentiel.
+        force_offline: Si True, force le mode offline
+
+    Returns:
+        Array numpy d'embeddings normalises (n_texts, dimension)
     """
+    # Verifier si on est en mode offline
+    offline_mode = force_offline or (CONFIG_MANAGER_AVAILABLE and is_offline_mode())
+
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        log.info(f"[emb] Mode OFFLINE actif - utilisation BGE-M3 local")
+        return embed_in_batches_offline(
+            texts=texts,
+            role=role,
+            batch_size=batch_size,
+            log=log,
+        )
+
+    # Mode online (API Snowflake)
     # Tronquer les textes trop longs (limite Snowflake: 8192 tokens ≈ 28000 chars)
     truncated_count = 0
     safe_texts = []
@@ -411,10 +472,36 @@ def call_dallem_chat(
     question: str,
     context: str,
     log: Logger,
+    force_offline: bool = False,
 ) -> str:
     """
-    Appel simple au LLM DALLEM via /chat/completions.
+    Appel au LLM pour generer une reponse RAG.
+
+    En mode offline, utilise Mistral-7B local.
+    En mode online, utilise l'API DALLEM.
+
+    Args:
+        http_client: Client HTTP (ignore en mode offline)
+        question: Question de l'utilisateur
+        context: Contexte documentaire
+        log: Logger
+        force_offline: Si True, force le mode offline
+
+    Returns:
+        Reponse generee
     """
+    # Verifier si on est en mode offline
+    offline_mode = force_offline or (CONFIG_MANAGER_AVAILABLE and is_offline_mode())
+
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        log.info("[RAG] Mode OFFLINE actif - utilisation Mistral-7B local")
+        return call_llm_offline(
+            question=question,
+            context=context,
+            log=log,
+        )
+
+    # Mode online (API DALLEM)
     if not DALLEM_API_KEY or DALLEM_API_KEY in ("toto", "EMPTY"):
         raise RuntimeError("DALLEM_API_KEY manquant ou de test. Impossible d'utiliser le LLM.")
 
@@ -504,3 +591,128 @@ def call_dallem_chat(
         "👉 **Veuillez reposer votre question** ou réessayer dans quelques instants."
     )
     return error_msg
+
+
+# ---------------------------------------------------------------------
+#  HELPERS POUR LE MODE OFFLINE
+# ---------------------------------------------------------------------
+
+def get_current_mode() -> str:
+    """
+    Retourne le mode actuel (online ou offline).
+
+    Returns:
+        "online" ou "offline"
+    """
+    if CONFIG_MANAGER_AVAILABLE and is_offline_mode():
+        return "offline"
+    return "online"
+
+
+def is_offline_available() -> bool:
+    """
+    Verifie si le mode offline est disponible (modeles installes).
+
+    Returns:
+        True si le mode offline est disponible
+    """
+    return OFFLINE_MODELS_AVAILABLE
+
+
+def get_models_status() -> dict:
+    """
+    Retourne le statut des modeles (online et offline).
+
+    Returns:
+        Dict avec informations sur les modeles disponibles
+    """
+    status = {
+        "current_mode": get_current_mode(),
+        "online": {
+            "available": True,
+            "llm_model": LLM_MODEL,
+            "embed_model": EMBED_MODEL,
+            "api_base_llm": DALLEM_API_BASE,
+            "api_base_embed": SNOWFLAKE_API_BASE,
+        },
+        "offline": {
+            "available": OFFLINE_MODELS_AVAILABLE,
+            "models": {},
+        },
+    }
+
+    if OFFLINE_MODELS_AVAILABLE:
+        try:
+            offline_status = get_offline_status()
+            status["offline"]["models"] = offline_status.get("models", {})
+            status["offline"]["gpu"] = offline_status.get("gpu", {})
+        except Exception:
+            pass
+
+    return status
+
+
+def create_embeddings_client(
+    log: Optional[Logger] = None,
+    force_offline: bool = False,
+):
+    """
+    Cree un client embeddings selon le mode actuel.
+
+    En mode offline, retourne un wrapper pour OfflineEmbeddings.
+    En mode online, retourne DirectOpenAIEmbeddings.
+
+    Args:
+        log: Logger optionnel
+        force_offline: Si True, force le mode offline
+
+    Returns:
+        Client embeddings
+    """
+    _log = log or logging.getLogger("rag_da")
+
+    offline_mode = force_offline or (CONFIG_MANAGER_AVAILABLE and is_offline_mode())
+
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        _log.info("[EMB] Creation client embeddings OFFLINE (BGE-M3)")
+        return get_offline_embeddings(log=_log)
+
+    _log.info("[EMB] Creation client embeddings ONLINE (Snowflake)")
+    http_client = create_http_client()
+    return DirectOpenAIEmbeddings(
+        model=EMBED_MODEL,
+        api_key=SNOWFLAKE_API_KEY,
+        base_url=SNOWFLAKE_API_BASE,
+        http_client=http_client,
+        role_prefix=True,
+        logger=_log,
+    )
+
+
+def create_llm_client(
+    log: Optional[Logger] = None,
+    force_offline: bool = False,
+):
+    """
+    Cree un client LLM selon le mode actuel.
+
+    En mode offline, retourne OfflineLLM.
+    En mode online, retourne None (utiliser call_dallem_chat directement).
+
+    Args:
+        log: Logger optionnel
+        force_offline: Si True, force le mode offline
+
+    Returns:
+        Client LLM ou None
+    """
+    _log = log or logging.getLogger("rag_da")
+
+    offline_mode = force_offline or (CONFIG_MANAGER_AVAILABLE and is_offline_mode())
+
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        _log.info("[LLM] Creation client LLM OFFLINE (Mistral-7B)")
+        return get_offline_llm(log=_log)
+
+    _log.info("[LLM] Mode ONLINE - utiliser call_dallem_chat()")
+    return None
