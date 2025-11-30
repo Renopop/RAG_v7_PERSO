@@ -13,7 +13,7 @@ Ce module permet de:
 import os
 import json
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 from dataclasses import dataclass, asdict, field
 
 
@@ -54,11 +54,11 @@ class StorageConfig:
     feedback_dir: str
     offline_mode: bool = False
 
-    def to_dict(self) -> Dict[str, any]:
+    def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, any]) -> "StorageConfig":
+    def from_dict(cls, data: Dict[str, Any]) -> "StorageConfig":
         return cls(
             base_root_dir=data.get("base_root_dir", DEFAULT_CONFIG["base_root_dir"]),
             csv_import_dir=data.get("csv_import_dir", DEFAULT_CONFIG["csv_import_dir"]),
@@ -119,11 +119,21 @@ def is_network_path_accessible(path: Optional[str] = None) -> bool:
     test_path = path or PRIMARY_NETWORK_BASE
 
     try:
-        # Pour les chemins réseau Windows (N:\, \\server\share)
-        if test_path.startswith(("N:", "n:", r"\\", "//")):
+        if not test_path:
+            return False
+        # Normaliser pour gérer les majuscules/minuscules sur Windows
+        path_upper = test_path.upper()
+        # Pour les chemins réseau Windows (\\server\share, //server/share)
+        # ou les lettres de lecteur (N:, D:, etc.)
+        is_windows_path = (
+            test_path.startswith(r"\\") or
+            test_path.startswith("//") or
+            (len(test_path) >= 2 and path_upper[1] == ":")
+        )
+        if is_windows_path:
             return os.path.exists(test_path) and os.access(test_path, os.R_OK)
         return os.path.exists(test_path) and os.access(test_path, os.R_OK)
-    except (OSError, PermissionError, Exception) as e:
+    except (OSError, PermissionError, TypeError, Exception) as e:
         print(f"[CONFIG] Chemin réseau inaccessible ({test_path}): {e}")
         return False
 
@@ -578,7 +588,7 @@ def get_feedback_dir(use_fallback: bool = True) -> str:
     return load_config().feedback_dir
 
 
-def get_storage_status() -> Dict[str, any]:
+def get_storage_status() -> Dict[str, Any]:
     """
     Retourne le statut complet du stockage.
 
