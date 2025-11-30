@@ -8,16 +8,22 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 import csv
 import os
+import sys
 from typing import List, Dict
 
-# Import de la configuration des chemins
+# Ajouter le répertoire racine du projet au PYTHONPATH
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+# Import de la configuration des chemins avec gestion du fallback local
 try:
-    from config_manager import load_config
-    _config = load_config()
-    CSV_IMPORT_DIR = _config.csv_import_dir
+    from core.config_manager import get_csv_import_dir
+    CSV_IMPORT_DIR = get_csv_import_dir(use_fallback=True)
 except ImportError:
     # Fallback si config_manager n'est pas disponible
-    CSV_IMPORT_DIR = r"N:\DA\SOC\RDA\ORG\DGT\POLE-SYSTEME\ENERGIE\RESERVE\PROP\Knowledge\IA_PROP\FAISS_DATABASE\CSV_Ingestion"
+    # Utiliser un répertoire local par défaut
+    CSV_IMPORT_DIR = os.path.join(os.path.expanduser("~"), "RAG_FAISS_LOCAL", "CSV_Ingestion")
 
 
 class ToolTip:
