@@ -1578,6 +1578,7 @@ def call_llm_offline(
     question: str,
     context: str,
     log=None,
+    max_tokens: int = 800,
 ) -> str:
     """
     Version offline de call_dallem_chat compatible avec models_utils.py.
@@ -1586,6 +1587,7 @@ def call_llm_offline(
         question: Question de l'utilisateur
         context: Contexte documentaire
         log: Logger
+        max_tokens: Nombre max de tokens a generer
 
     Returns:
         Reponse generee
@@ -1602,43 +1604,63 @@ def call_llm_offline(
 
     llm = get_offline_llm(log=_log)
 
-    # Limiter le contexte pour eviter les reponses trop longues
-    max_context_chars = 6000  # ~1500 tokens
+    # Limiter le contexte pour Mistral-7B (contexte max ~4000 tokens)
+    max_context_chars = 8000  # ~2000 tokens pour laisser de la place a la reponse
     if len(context) > max_context_chars:
-        context = context[:max_context_chars] + "\n[... contexte tronque ...]"
+        context = context[:max_context_chars] + "\n[...]"
         _log.info(f"[OFFLINE-LLM] Contexte tronque a {max_context_chars} caracteres")
 
-    # Prompt simplifie et direct pour Mistral
-    system_msg = (
-        "Tu es un assistant expert en reglementation aeronautique EASA. "
-        "Reponds de maniere CONCISE et PRECISE en te basant UNIQUEMENT sur le contexte fourni. "
-        "Cite les references (CS, AMC, GM) du contexte. "
-        "Si l'information n'est pas dans le contexte, dis-le clairement."
-    )
+    # Nettoyer le contexte: supprimer les metadonnees excessives
+    import re
+    # Garder seulement le contenu utile, retirer les [source=..., chunk=...] detailles
+    context_clean = re.sub(r'\[source=[^\]]+, chunk=\d+[^\]]*\]', '', context)
+    context_clean = re.sub(r'\n{3,}', '\n\n', context_clean)  # Max 2 newlines
+    context_clean = context_clean.strip()
 
-    user_msg = f"""CONTEXTE:
-{context}
+    # Prompt optimise pour Mistral-7B-Instruct v0.3
+    # Mistral fonctionne mieux sans role "system" - tout dans user
+    prompt = f"""Tu es un expert en reglementation aeronautique EASA.
+
+DOCUMENTS DE REFERENCE:
+{context_clean}
 
 QUESTION: {question}
 
-REPONSE CONCISE:"""
+INSTRUCTIONS:
+- Reponds en francais de maniere claire et structuree
+- Base ta reponse UNIQUEMENT sur les documents ci-dessus
+- Cite les references (CS-25, CS-E, AMC, GM) quand disponibles
+- Si l'information n'est pas dans les documents, indique-le
 
-    messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": user_msg},
-    ]
+REPONSE:"""
 
     _log.info("[OFFLINE-LLM] Generation de reponse RAG en mode offline")
-    print(f"[OFFLINE-LLM] Contexte: {len(context)} chars, Question: {len(question)} chars")
+    print(f"[OFFLINE-LLM] Contexte: {len(context_clean)} chars, Question: {len(question)} chars")
+    print(f"[OFFLINE-LLM] Debut du prompt:\n{prompt[:500]}...")
 
     try:
-        # Reduire max_new_tokens pour des reponses plus courtes
-        response = llm.chat(messages, max_new_tokens=600, temperature=0.2)
-        _log.info(f"[OFFLINE-LLM] Reponse generee: {len(response)} caracteres")
-        print(f"[OFFLINE-LLM] Reponse: {len(response)} caracteres")
-        return response
+        import time
+        _start = time.time()
+
+        # Utiliser generate() directement avec le format Mistral [INST]
+        full_prompt = f"<s>[INST] {prompt} [/INST]"
+        response = llm.generate(
+            prompt=full_prompt,
+            max_new_tokens=max_tokens,
+            temperature=0.3,
+            do_sample=True,
+        )
+
+        _duration = time.time() - _start
+        _log.info(f"[OFFLINE-LLM] Reponse generee: {len(response)} caracteres en {_duration:.1f}s")
+        print(f"[OFFLINE-LLM] Reponse generee en {_duration:.1f}s ({len(response)} chars)")
+        print(f"[OFFLINE-LLM] Debut reponse: {response[:200]}...")
+
+        return response.strip()
     except Exception as e:
         _log.error(f"[OFFLINE-LLM] Erreur generation: {e}")
+        import traceback
+        traceback.print_exc()
         return f"Erreur lors de la generation de la reponse: {e}"
 
 
