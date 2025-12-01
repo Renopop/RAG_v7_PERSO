@@ -440,6 +440,7 @@ def _run_rag_query_single_collection(
 
     # ========== EARLY OFFLINE MODE DETECTION ==========
     offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+    print(f"[RAG] === Requete sur collection: {collection_name} ===")
     if offline_mode:
         print("[RAG] 🔌 Mode OFFLINE detecte")
         _log.info("[RAG] 🔌 Mode OFFLINE detecte")
@@ -599,6 +600,9 @@ def _run_rag_query_single_collection(
         # "never" -> should_hybrid reste False
 
     if should_hybrid:
+        print(f"[RAG] 🔀 Mode Hybrid Search ({collection_size} chunks)...")
+        import time
+        _hybrid_start = time.time()
         _log.info(f"[RAG] 🔀 Mode Hybrid Search activé (collection: {collection_size} chunks)")
         try:
             # Construire ou charger l'index BM25
@@ -622,6 +626,7 @@ def _run_rag_query_single_collection(
                     sparse_weight=1.0 - hybrid_dense_weight,
                     log=_log,
                 )
+                print(f"[RAG] ✅ Hybrid Search termine en {time.time() - _hybrid_start:.1f}s")
                 _log.info("[RAG] ✅ Hybrid search completed")
             else:
                 _log.warning("[RAG] BM25 index unavailable, falling back to dense search")
@@ -683,6 +688,7 @@ def _run_rag_query_single_collection(
 
     # Option C: Mode standard (une seule requête) - si aucune autre option
     elif not should_hybrid:
+        print("[RAG] 🔍 Mode recherche standard...")
         q_emb = embed_query(question)
 
         _log.info("[RAG] Querying FAISS index...")
@@ -691,6 +697,7 @@ def _run_rag_query_single_collection(
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
+        print("[RAG] ✅ Recherche standard terminee")
         _log.info(f"[RAG] ✅ Query successful")
 
     # Accès sécurisé aux résultats (évite IndexError si liste vide)
