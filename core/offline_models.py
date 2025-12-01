@@ -1712,6 +1712,97 @@ def rerank_offline(
 
 
 # =============================================================================
+#  PRELOAD MODELS AT STARTUP
+# =============================================================================
+
+def preload_all_models(log=None) -> Dict[str, bool]:
+    """
+    Pre-charge tous les modeles offline au demarrage pour eviter
+    les temps de chargement pendant les requetes.
+
+    Appelez cette fonction au demarrage de l'application Streamlit
+    pour que les modeles soient deja en memoire.
+
+    Args:
+        log: Logger optionnel
+
+    Returns:
+        Dict avec le statut de chargement de chaque modele
+    """
+    import time
+    _log = log or logger
+    results = {}
+
+    print("\n" + "=" * 60)
+    print("[PRELOAD] Pre-chargement des modeles offline...")
+    print("=" * 60)
+
+    total_start = time.time()
+
+    # 1. Embeddings (BGE-M3) - necessaire pour la recherche
+    try:
+        print("[PRELOAD] 1/3 Chargement BGE-M3 (embeddings)...")
+        _start = time.time()
+        emb = get_offline_embeddings(log=_log)
+        # Force le chargement en appelant _ensure_loaded
+        emb._ensure_loaded()
+        _duration = time.time() - _start
+        print(f"[PRELOAD] ✅ BGE-M3 charge en {_duration:.1f}s")
+        results["embeddings"] = True
+    except Exception as e:
+        print(f"[PRELOAD] ❌ BGE-M3 echec: {e}")
+        _log.error(f"[PRELOAD] Erreur chargement embeddings: {e}")
+        results["embeddings"] = False
+
+    # 2. Reranker (BGE-Reranker-v2-m3) - pour le re-classement
+    try:
+        print("[PRELOAD] 2/3 Chargement BGE-Reranker...")
+        _start = time.time()
+        reranker = get_offline_reranker(log=_log)
+        reranker._ensure_loaded()
+        _duration = time.time() - _start
+        print(f"[PRELOAD] ✅ BGE-Reranker charge en {_duration:.1f}s")
+        results["reranker"] = True
+    except Exception as e:
+        print(f"[PRELOAD] ❌ BGE-Reranker echec: {e}")
+        _log.error(f"[PRELOAD] Erreur chargement reranker: {e}")
+        results["reranker"] = False
+
+    # 3. LLM (Mistral-7B) - pour la generation de reponses
+    try:
+        print("[PRELOAD] 3/3 Chargement Mistral-7B (LLM)...")
+        _start = time.time()
+        llm = get_offline_llm(log=_log)
+        llm._ensure_loaded()
+        _duration = time.time() - _start
+        print(f"[PRELOAD] ✅ Mistral-7B charge en {_duration:.1f}s")
+        results["llm"] = True
+    except Exception as e:
+        print(f"[PRELOAD] ❌ Mistral-7B echec: {e}")
+        _log.error(f"[PRELOAD] Erreur chargement LLM: {e}")
+        results["llm"] = False
+
+    total_duration = time.time() - total_start
+
+    # Afficher le resume
+    print("=" * 60)
+    success_count = sum(1 for v in results.values() if v)
+    total_count = len(results)
+    if success_count == total_count:
+        print(f"[PRELOAD] ✅ Tous les modeles charges ({total_duration:.1f}s)")
+    else:
+        print(f"[PRELOAD] ⚠️ {success_count}/{total_count} modeles charges ({total_duration:.1f}s)")
+
+    # Afficher utilisation VRAM
+    gpu_info = get_gpu_memory_info()
+    if gpu_info["total_gb"] > 0:
+        print(f"[PRELOAD] VRAM utilisee: {gpu_info['allocated_gb']:.1f}/{gpu_info['total_gb']:.1f} GB")
+    print("=" * 60 + "\n")
+
+    return results
+
+
+# =============================================================================
 #  STATUS & INFO
 # =============================================================================
 
