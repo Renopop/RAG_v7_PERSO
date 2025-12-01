@@ -940,15 +940,19 @@ def _run_rag_query_single_collection(
 
     # ========== LOST IN THE MIDDLE MITIGATION ==========
     # Apply reordering for 2+ sources (was > 3, but even 2 sources can benefit)
+    # IMPORTANT: On garde l'ordre original pour l'affichage (sources_display)
+    # et on utilise l'ordre réordonné uniquement pour le contexte LLM
+    sources_display = sources.copy()  # Ordre original par pertinence pour l'affichage
+
     if use_lost_in_middle and LOST_IN_MIDDLE_AVAILABLE and len(sources) > 1:
         _log.info(f"[RAG] 🔀 Applying Lost in Middle reordering (strategy={lost_in_middle_strategy})...")
         try:
-            # Réordonner les sources
-            sources = reorder_for_lost_in_middle(sources, strategy=lost_in_middle_strategy)
+            # Réordonner les sources UNIQUEMENT pour le contexte LLM
+            sources_for_context = reorder_for_lost_in_middle(sources.copy(), strategy=lost_in_middle_strategy)
 
-            # Reconstruire les context_blocks dans le nouvel ordre
+            # Reconstruire les context_blocks dans l'ordre Lost-in-Middle
             context_blocks = []
-            for src in sources:
+            for src in sources_for_context:
                 section_info = _format_section_info(src)
                 header = (
                     f"[source={src['source_file']}{section_info}, chunk={src['chunk_id']}, "
@@ -956,19 +960,19 @@ def _run_rag_query_single_collection(
                 )
                 context_blocks.append(f"{header}\n{src['text']}")
 
-            _log.info(f"[RAG] ✅ Lost in Middle reordering applied")
+            _log.info(f"[RAG] ✅ Lost in Middle reordering applied (display keeps original order)")
         except Exception as e:
             _log.warning(f"[RAG] Lost in Middle reordering failed: {e}")
 
     full_context = "\n\n".join(context_blocks)
 
     if not call_llm:
-        # Mode "retrieval only"
+        # Mode "retrieval only" - retourne l'ordre original pour l'affichage
         return {
             "answer": "",
             "context_str": full_context,
             "raw_results": raw,
-            "sources": sources,
+            "sources": sources_display,  # Ordre original par pertinence
             "cache_outdated": cache_outdated,
             "using_cache": using_cache,
         }
@@ -1056,7 +1060,7 @@ def _run_rag_query_single_collection(
         "answer": answer,
         "context_str": full_context,
         "raw_results": raw,
-        "sources": sources,
+        "sources": sources_display,  # Ordre original par pertinence pour l'affichage
         "cache_outdated": cache_outdated,
         "using_cache": using_cache,
         "cached": False,
@@ -1504,21 +1508,28 @@ def run_multi_collection_rag_query(
             sources.append(src)
 
     # ========== LOST IN THE MIDDLE ==========
+    # IMPORTANT: On garde l'ordre original pour l'affichage (sources_display)
+    # et on utilise l'ordre réordonné uniquement pour le contexte LLM
+    sources_display = sources.copy()  # Ordre original par pertinence pour l'affichage
+
     if use_lost_in_middle and LOST_IN_MIDDLE_AVAILABLE and len(sources) > 1:
         _log.info(f"[RAG-MULTI] Applying Lost in Middle ({lost_in_middle_strategy})")
         try:
-            sources = reorder_for_lost_in_middle(sources, strategy=lost_in_middle_strategy)
+            sources_for_context = reorder_for_lost_in_middle(sources.copy(), strategy=lost_in_middle_strategy)
         except Exception as e:
             _log.warning(f"[RAG-MULTI] Lost in middle failed: {e}")
+            sources_for_context = sources
+    else:
+        sources_for_context = sources
 
     # ========== BUILD CONTEXT ==========
-    context_str = format_sources_with_provenance(sources)
+    context_str = format_sources_with_provenance(sources_for_context)
 
     if not call_llm:
         return {
             "answer": "",
             "context_str": context_str,
-            "sources": sources,
+            "sources": sources_display,  # Ordre original par pertinence
             "collections_searched": collection_names,
             "raw_results": raw_results,
         }
@@ -1563,7 +1574,7 @@ def run_multi_collection_rag_query(
     result = {
         "answer": answer,
         "context_str": context_str,
-        "sources": sources,
+        "sources": sources_display,  # Ordre original par pertinence pour l'affichage
         "collections_searched": collection_names,
         "raw_results": raw_results,
     }
