@@ -316,13 +316,14 @@ Génère {num_variations} variations de cette question pour améliorer la recher
             # Mode offline - utiliser le LLM local
             _log.info(f"[QUERY-EXPAND] 🔒 Mode OFFLINE - Génération de {num_variations} variations avec LLM local...")
             try:
-                from core.offline_models import call_llm_offline
-                content = call_llm_offline(
-                    prompt=user_prompt,
-                    system_prompt=system_prompt,
-                    max_tokens=300,
+                from core.offline_models import get_offline_llm
+                llm = get_offline_llm(log=_log)
+                # Construire le prompt complet pour Mistral (format [INST])
+                full_prompt = f"[INST] {system_prompt}\n\n{user_prompt} [/INST]"
+                content = llm.generate(
+                    prompt=full_prompt,
+                    max_new_tokens=300,
                     temperature=0.7,
-                    log=_log
                 )
             except ImportError:
                 _log.warning("[QUERY-EXPAND] LLM offline non disponible, utilisation de la question originale uniquement.")
