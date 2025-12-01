@@ -34,6 +34,13 @@ try:
 except ImportError:
     OFFLINE_RERANKER_AVAILABLE = False
 
+# Import du LLM offline pour HyDE et query expansion
+try:
+    from core.offline_models import call_llm_offline
+    OFFLINE_LLM_AVAILABLE = True
+except ImportError:
+    OFFLINE_LLM_AVAILABLE = False
+
 
 # =====================================================================
 #  LOST IN THE MIDDLE MITIGATION
@@ -157,34 +164,59 @@ La réponse doit:
 
 Réponse:"""
 
+    # Vérifier le mode offline
+    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+
     try:
-        url = api_base.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.3,  # Basse température pour réponse factuelle
-            "max_tokens": 500,
-        }
+        if offline_mode and OFFLINE_LLM_AVAILABLE:
+            # Mode offline - utiliser le LLM local
+            _log.info("[HyDE] 🔒 Mode OFFLINE - Génération avec LLM local (Mistral-7B)...")
 
-        resp = http_client.post(url, headers=headers, json=payload, timeout=30.0)
-        resp.raise_for_status()
-        data = resp.json()
+            # Construire le prompt complet
+            full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            content = call_llm_offline(
+                question=full_prompt,
+                context="",  # Pas de contexte pour HyDE
+                log=_log,
+                max_tokens=500,
+            )
 
-        if content and len(content) > 50:
-            _log.info(f"[HyDE] Document hypothétique généré ({len(content)} chars)")
-            return content
+            if content and len(content) > 50:
+                _log.info(f"[HyDE] Document hypothétique généré offline ({len(content)} chars)")
+                return content
+            else:
+                _log.warning("[HyDE] Réponse offline trop courte, utilisation de la question originale")
+                return None
         else:
-            _log.warning("[HyDE] Réponse trop courte, utilisation de la question originale")
-            return None
+            # Mode online
+            url = api_base.rstrip("/") + "/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.3,  # Basse température pour réponse factuelle
+                "max_tokens": 500,
+            }
+
+            resp = http_client.post(url, headers=headers, json=payload, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
+
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+            if content and len(content) > 50:
+                _log.info(f"[HyDE] Document hypothétique généré ({len(content)} chars)")
+                return content
+            else:
+                _log.warning("[HyDE] Réponse trop courte, utilisation de la question originale")
+                return None
 
     except Exception as e:
         _log.warning(f"[HyDE] Échec de génération: {e}. Fallback sur question originale.")
