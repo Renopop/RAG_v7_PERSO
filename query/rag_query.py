@@ -438,6 +438,11 @@ def _run_rag_query_single_collection(
     if not question:
         raise ValueError("Question vide")
 
+    # ========== EARLY OFFLINE MODE DETECTION ==========
+    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+    if offline_mode:
+        _log.info("[RAG] 🔌 Mode OFFLINE detecte")
+
     # ========== PHASE 3: QUERY UNDERSTANDING ==========
     query_analysis = None
     original_top_k = top_k
@@ -473,11 +478,6 @@ def _run_rag_query_single_collection(
 
         except Exception as e:
             _log.warning(f"[RAG] Query understanding failed: {e}")
-
-    # ========== DETECTION MODE OFFLINE (early) ==========
-    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
-    if offline_mode:
-        _log.info("[RAG] 🔌 Mode OFFLINE detecte")
 
     # ========== PHASE 2: SEMANTIC CACHE CHECK ==========
     semantic_cache = None
