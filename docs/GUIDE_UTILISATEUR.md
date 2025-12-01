@@ -599,6 +599,103 @@ Visualisez les statistiques et tendances des retours utilisateurs.
 
 ---
 
+## 🔌 Mode OFFLINE (v2.1)
+
+Le mode offline permet d'utiliser le système RAG **sans connexion internet**, en utilisant des modèles IA locaux sur GPU NVIDIA.
+
+### Prérequis matériel
+
+| Composant | Minimum | Recommandé |
+|-----------|---------|------------|
+| **GPU** | RTX 3080 (10 GB) | RTX 4090 (24 GB) |
+| **VRAM** | 12 GB | 16+ GB |
+| **Disque** | 20 GB (modèles) | SSD NVMe |
+
+### Modèles locaux
+
+| Modèle | Fonction | VRAM utilisée |
+|--------|----------|---------------|
+| **BGE-M3** | Embeddings (1024 dim) | ~2 GB |
+| **BGE-Reranker-v2-m3** | Re-ranking des résultats | ~2 GB |
+| **Mistral-7B-Instruct-v0.3** | Génération de réponses | ~8 GB |
+
+### Activation du mode offline
+
+1. Dans la **sidebar** de l'application, section "Mode de fonctionnement"
+2. Cochez **"🔌 Mode OFFLINE (modèles locaux)"**
+3. Un spinner "Chargement des modèles IA locaux..." apparaît
+4. Les modèles sont pré-chargés en mémoire GPU
+
+### Pré-chargement automatique
+
+Au démarrage en mode offline, les modèles sont **pré-chargés automatiquement** :
+
+```
+============================================================
+[PRELOAD] Pre-chargement des modeles offline...
+============================================================
+[PRELOAD] 1/3 Chargement BGE-M3 (embeddings)...
+[PRELOAD] ✅ BGE-M3 charge en 3.2s
+[PRELOAD] 2/3 Chargement BGE-Reranker...
+[PRELOAD] ✅ BGE-Reranker charge en 2.1s
+[PRELOAD] 3/3 Chargement Mistral-7B (LLM)...
+[PRELOAD] ✅ Mistral-7B charge en 24.5s
+============================================================
+[PRELOAD] ✅ Tous les modeles charges (29.8s)
+[PRELOAD] VRAM utilisee: 12.5/24.0 GB
+============================================================
+```
+
+**Avantages du pré-chargement :**
+- ✅ Les requêtes sont plus rapides (pas de temps de chargement)
+- ✅ Les modèles restent en mémoire GPU
+- ✅ Le chargement se fait une seule fois au démarrage
+
+### Performance en mode offline (RTX 4090)
+
+| Opération | Temps |
+|-----------|-------|
+| Recherche Hybrid Search (5000 chunks) | ~8s |
+| BGE Reranker (30 documents) | ~3s |
+| Génération de réponse LLM | ~7s |
+| **Total par requête** | **~20s** |
+
+### Emplacement des modèles
+
+Les modèles doivent être téléchargés dans les chemins suivants :
+
+| Modèle | Chemin |
+|--------|--------|
+| BGE-M3 | `D:\LLM_Models\bge-m3` |
+| BGE-Reranker | `D:\LLM_Models\bge-reranker-v2-m3` |
+| Mistral-7B | `D:\LLM_Models\Mistral-7B-Instruct-v0.3` |
+
+> 💡 Les chemins sont configurables dans `config.json` ou via la page de configuration.
+
+### Téléchargement des modèles
+
+Les modèles peuvent être téléchargés depuis Hugging Face :
+
+```bash
+# BGE-M3 (embeddings)
+huggingface-cli download BAAI/bge-m3 --local-dir D:\LLM_Models\bge-m3
+
+# BGE-Reranker
+huggingface-cli download BAAI/bge-reranker-v2-m3 --local-dir D:\LLM_Models\bge-reranker-v2-m3
+
+# Mistral-7B-Instruct
+huggingface-cli download mistralai/Mistral-7B-Instruct-v0.3 --local-dir D:\LLM_Models\Mistral-7B-Instruct-v0.3
+```
+
+### Limitations du mode offline
+
+- ❌ Ingestion de nouveaux documents (requiert les embeddings API)
+- ❌ Confluence (requiert connexion réseau)
+- ⚠️ Qualité des réponses légèrement inférieure au mode online
+- ⚠️ Utilise la VRAM en permanence (~12 GB)
+
+---
+
 ## 🆘 Besoin d'aide ?
 
 ### Logs

@@ -57,6 +57,7 @@ try:
         check_offline_models_available,
         detect_gpu,
         GPUInfo,
+        preload_all_models,
     )
     OFFLINE_MODULE_AVAILABLE = True
 except ImportError:
@@ -67,6 +68,8 @@ except ImportError:
         return {}
     def detect_gpu():
         return None
+    def preload_all_models(log=None):
+        return {}
 
 # Import pour le statut des modeles
 from core.models_utils import get_current_mode, is_offline_available, get_models_status
@@ -98,6 +101,28 @@ except ImportError:
     CONFLUENCE_AVAILABLE = False
 
 logger = make_logger(debug=False)
+
+
+# =====================================================================
+#  PRE-CHARGEMENT DES MODELES OFFLINE AU DEMARRAGE
+# =====================================================================
+
+@st.cache_resource(show_spinner=False)
+def _preload_offline_models_once():
+    """
+    Pre-charge les modeles offline une seule fois au demarrage.
+    Utilise st.cache_resource pour ne s'executer qu'une seule fois
+    par session Streamlit.
+    """
+    if OFFLINE_MODULE_AVAILABLE and is_offline_mode():
+        print("[STREAMLIT] Mode offline actif - pre-chargement des modeles...")
+        return preload_all_models(log=logger)
+    return {}
+
+
+# Appeler le pre-chargement au demarrage si en mode offline
+if is_offline_mode():
+    _preload_offline_models_once()
 
 
 def sanitize_collection_name(name: str) -> str:
@@ -707,12 +732,16 @@ if is_admin:
         if new_offline_state != st.session_state.offline_mode_enabled:
             st.session_state.offline_mode_enabled = new_offline_state
             set_offline_mode(new_offline_state)
+            # Si on active le mode offline, pre-charger les modeles
+            if new_offline_state and OFFLINE_MODULE_AVAILABLE:
+                with st.spinner("🔄 Chargement des modèles IA locaux..."):
+                    _preload_offline_models_once()
             st.rerun()  # Recharger pour appliquer les changements
 
         # Afficher le statut du mode
         if st.session_state.offline_mode_enabled:
             st.success("🔌 Mode OFFLINE actif")
-            st.caption("Utilisation des modeles locaux")
+            st.caption("Utilisation des modeles locaux (pre-charges)")
         else:
             st.info("🌐 Mode ONLINE actif")
             st.caption("Utilisation des APIs distantes")

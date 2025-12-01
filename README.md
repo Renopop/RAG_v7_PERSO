@@ -99,6 +99,7 @@ L'application s'ouvre automatiquement dans votre navigateur sur `http://localhos
 
 ## Fonctionnalites principales
 
+- **Mode OFFLINE** : fonctionne sans connexion internet avec modeles locaux (RTX 4090 recommande)
 - **Gestion CSV** avec interface GUI moderne
 - **Ingestion documents** (PDF, DOCX, PPTX, XML, TXT) avec tracking automatique
 - **Ingestion Confluence** : chargement d'espaces entiers via API *(admin)*
@@ -121,6 +122,7 @@ L'application s'ouvre automatiquement dans votre navigateur sur `http://localhos
 | `faiss_store.py` | Store FAISS avec lazy loading et cache local |
 | `semantic_cache.py` | Cache semantique pour requetes similaires |
 | `config_manager.py` | Gestion des chemins et configuration |
+| `offline_models.py` | **NOUVEAU** - Modeles locaux (BGE-M3, Mistral-7B, BGE-Reranker) |
 
 ### Processing (`processing/`)
 
@@ -270,11 +272,67 @@ Le pipeline detecte automatiquement la RAM disponible et adapte sa configuration
 
 ---
 
+## Mode OFFLINE (v2.1)
+
+Le mode offline permet d'utiliser le systeme RAG sans connexion internet, en utilisant des modeles IA locaux sur GPU.
+
+### Modeles locaux utilises
+
+| Modele | Fonction | VRAM |
+|--------|----------|------|
+| **BGE-M3** | Embeddings (1024 dim) | ~2 GB |
+| **BGE-Reranker-v2-m3** | Re-ranking | ~2 GB |
+| **Mistral-7B-Instruct-v0.3** | Generation reponses | ~8 GB |
+
+### Pre-chargement au demarrage
+
+Les modeles sont **pre-charges au demarrage** de l'application pour eviter les temps de chargement pendant les requetes :
+
+```
+============================================================
+[PRELOAD] Pre-chargement des modeles offline...
+============================================================
+[PRELOAD] 1/3 Chargement BGE-M3 (embeddings)...
+[PRELOAD] ✅ BGE-M3 charge en 3.2s
+[PRELOAD] 2/3 Chargement BGE-Reranker...
+[PRELOAD] ✅ BGE-Reranker charge en 2.1s
+[PRELOAD] 3/3 Chargement Mistral-7B (LLM)...
+[PRELOAD] ✅ Mistral-7B charge en 24.5s
+============================================================
+[PRELOAD] ✅ Tous les modeles charges (29.8s)
+[PRELOAD] VRAM utilisee: 12.5/24.0 GB
+============================================================
+```
+
+### Performance attendue (RTX 4090)
+
+| Operation | Temps |
+|-----------|-------|
+| Recherche Hybrid (5000 chunks) | ~8s |
+| BGE Reranker (30 docs) | ~3s |
+| Generation LLM | ~7s |
+| **Total par requete** | **~20s** |
+
+### Activation
+
+Dans la sidebar Streamlit, cochez **"🔌 Mode OFFLINE (modeles locaux)"**.
+
+---
+
 ## Prerequis
 
+### Mode ONLINE (par defaut)
 - Python 3.8 ou superieur
 - Windows 10/11 (ou Linux/macOS avec adaptations)
 - Acces reseau aux APIs : Snowflake (embeddings), DALLEM (LLM), BGE Reranker
+
+### Mode OFFLINE (sans connexion)
+- GPU NVIDIA avec 16+ GB VRAM (RTX 4090 recommande)
+- Modeles locaux telecharges :
+  - **BGE-M3** : embeddings (1024 dimensions)
+  - **Mistral-7B-Instruct-v0.3** : generation de reponses
+  - **BGE-Reranker-v2-m3** : re-ranking des resultats
+- ~20 GB d'espace disque pour les modeles
 
 ---
 
@@ -289,5 +347,5 @@ Consultez la documentation pour toute question :
 
 ---
 
-**Version:** 2.0
-**Derniere mise a jour:** 2025-11-30
+**Version:** 2.1
+**Derniere mise a jour:** 2025-12-01
