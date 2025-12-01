@@ -14,6 +14,26 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
+# =====================================================================
+#  IMPORTS MODE OFFLINE (doivent etre en haut pour toutes les fonctions)
+# =====================================================================
+
+# Import du mode offline
+try:
+    from core.config_manager import is_offline_mode
+    CONFIG_MANAGER_AVAILABLE = True
+except ImportError:
+    CONFIG_MANAGER_AVAILABLE = False
+    def is_offline_mode():
+        return False
+
+# Import du reranker offline
+try:
+    from core.offline_models import get_offline_reranker
+    OFFLINE_RERANKER_AVAILABLE = True
+except ImportError:
+    OFFLINE_RERANKER_AVAILABLE = False
+
 
 # =====================================================================
 #  LOST IN THE MIDDLE MITIGATION
@@ -583,21 +603,8 @@ BGE_RERANKER_API_BASE = "https://api.dev.dassault-aviation.pro/bge-reranker-v2-m
 BGE_RERANKER_ENDPOINT = "rerank"
 BGE_RERANKER_API_KEY = "EMPTY"  # Peut être configuré si nécessaire
 
-# Import du mode offline
-try:
-    from core.config_manager import is_offline_mode
-    CONFIG_MANAGER_AVAILABLE = True
-except ImportError:
-    CONFIG_MANAGER_AVAILABLE = False
-    def is_offline_mode():
-        return False
-
-# Import du reranker offline
-try:
-    from core.offline_models import get_offline_reranker
-    OFFLINE_RERANKER_AVAILABLE = True
-except ImportError:
-    OFFLINE_RERANKER_AVAILABLE = False
+# Note: CONFIG_MANAGER_AVAILABLE, is_offline_mode, OFFLINE_RERANKER_AVAILABLE
+# sont importes en haut du fichier
 
 
 def rerank_with_bge(
