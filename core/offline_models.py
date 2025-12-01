@@ -1012,26 +1012,31 @@ class OfflineLLM:
         )
 
     def _format_chat_messages(self, messages: List[Dict[str, str]]) -> str:
-        """Formate les messages au format Mistral Instruct."""
-        formatted = ""
+        """
+        Formate les messages au format Mistral Instruct v0.3.
+
+        Format correct pour Mistral-7B-Instruct:
+        <s>[INST] {system_message}
+
+        {user_message} [/INST]
+        """
+        system_content = ""
+        user_content = ""
 
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
             if role == "system":
-                formatted += f"<s>[INST] {content}\n"
+                system_content = content
             elif role == "user":
-                if formatted:
-                    formatted += f" {content} [/INST]"
-                else:
-                    formatted += f"<s>[INST] {content} [/INST]"
-            elif role == "assistant":
-                formatted += f" {content}</s>"
+                user_content = content
 
-        # Ajouter le debut de la reponse assistant si necessaire
-        if not formatted.endswith("[/INST]") and not formatted.endswith("</s>"):
-            pass  # La generation commencera automatiquement
+        # Format simplifie et efficace pour Mistral
+        if system_content:
+            formatted = f"<s>[INST] {system_content}\n\n{user_content} [/INST]"
+        else:
+            formatted = f"<s>[INST] {user_content} [/INST]"
 
         return formatted
 
@@ -1597,29 +1602,26 @@ def call_llm_offline(
 
     llm = get_offline_llm(log=_log)
 
+    # Limiter le contexte pour eviter les reponses trop longues
+    max_context_chars = 6000  # ~1500 tokens
+    if len(context) > max_context_chars:
+        context = context[:max_context_chars] + "\n[... contexte tronque ...]"
+        _log.info(f"[OFFLINE-LLM] Contexte tronque a {max_context_chars} caracteres")
+
+    # Prompt simplifie et direct pour Mistral
     system_msg = (
         "Tu es un assistant expert en reglementation aeronautique EASA. "
-        "Tu maitrises parfaitement les documents de certification:\n"
-        "- CS (Certification Specifications): exigences reglementaires obligatoires\n"
-        "- AMC (Acceptable Means of Compliance): moyens acceptables pour demontrer la conformite\n"
-        "- GM (Guidance Material): explications et interpretations non contraignantes\n"
-        "Tu dois repondre en te basant UNIQUEMENT sur le CONTEXTE fourni."
+        "Reponds de maniere CONCISE et PRECISE en te basant UNIQUEMENT sur le contexte fourni. "
+        "Cite les references (CS, AMC, GM) du contexte. "
+        "Si l'information n'est pas dans le contexte, dis-le clairement."
     )
 
-    user_msg = f"""
-=== CONTEXTE DOCUMENTAIRE ===
+    user_msg = f"""CONTEXTE:
 {context}
-=== FIN DU CONTEXTE ===
 
-QUESTION : {question}
+QUESTION: {question}
 
-INSTRUCTIONS :
-- Reponds dans la meme langue que la question (francais si question en francais, anglais sinon)
-- Cite TOUJOURS les references exactes (ex: "CS 25.613", "AMC1 25.1309") presentes dans le contexte
-- Distingue clairement ce qui est une exigence (CS/shall) de ce qui est un moyen de conformite (AMC) ou une guidance (GM)
-- Pour les termes "shall", "must", "may", "should": precise le niveau d'obligation
-- Si le contexte ne contient AUCUNE information pertinente, reponds : "Je n'ai pas l'information pour repondre a cette question."
-"""
+REPONSE CONCISE:"""
 
     messages = [
         {"role": "system", "content": system_msg},
@@ -1627,10 +1629,13 @@ INSTRUCTIONS :
     ]
 
     _log.info("[OFFLINE-LLM] Generation de reponse RAG en mode offline")
+    print(f"[OFFLINE-LLM] Contexte: {len(context)} chars, Question: {len(question)} chars")
 
     try:
-        response = llm.chat(messages, max_new_tokens=2000, temperature=0.3)
+        # Reduire max_new_tokens pour des reponses plus courtes
+        response = llm.chat(messages, max_new_tokens=600, temperature=0.2)
         _log.info(f"[OFFLINE-LLM] Reponse generee: {len(response)} caracteres")
+        print(f"[OFFLINE-LLM] Reponse: {len(response)} caracteres")
         return response
     except Exception as e:
         _log.error(f"[OFFLINE-LLM] Erreur generation: {e}")
