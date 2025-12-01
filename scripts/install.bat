@@ -137,24 +137,27 @@ echo [ETAPE 4/5] Installation du mode OFFLINE...
 echo.
 
 REM Installer PyTorch avec CUDA si GPU detecte
+REM IMPORTANT: torch>=2.6.0 requis pour corriger CVE-2025-32434
 if "!GPU_DETECTED!"=="1" (
     echo Installation de PyTorch avec support CUDA...
     echo.
+    echo NOTE: PyTorch 2.6+ requis pour corriger une vulnerabilite de securite
+    echo.
     echo Quelle version de CUDA souhaitez-vous utiliser ?
-    echo   1. CUDA 11.8 (compatible avec la plupart des drivers)
-    echo   2. CUDA 12.1 (derniere version stable)
+    echo   1. CUDA 12.1 (stable, recommande)
+    echo   2. CUDA 12.4 (derniere version)
     echo   3. CPU uniquement (pas d'acceleration GPU)
     echo.
     set /p CUDA_CHOICE="Votre choix (1/2/3) : "
 
     if "!CUDA_CHOICE!"=="1" (
         echo.
-        echo Installation PyTorch avec CUDA 11.8...
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-    ) else if "!CUDA_CHOICE!"=="2" (
-        echo.
         echo Installation PyTorch avec CUDA 12.1...
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    ) else if "!CUDA_CHOICE!"=="2" (
+        echo.
+        echo Installation PyTorch avec CUDA 12.4...
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
     ) else (
         echo.
         echo Installation PyTorch CPU uniquement...
@@ -177,12 +180,17 @@ echo.
 
 REM Installer les autres dependances offline
 echo Installation des dependances Transformers...
-pip install transformers>=4.35.0 accelerate>=0.24.0 sentencepiece>=0.1.99 safetensors>=0.4.0 tokenizers>=0.14.0
+pip install transformers>=4.40.0 accelerate>=0.24.0 sentencepiece>=0.1.99 safetensors>=0.4.0 tokenizers>=0.14.0
 if errorlevel 1 (
     echo.
     echo [ATTENTION] L'installation de Transformers a echoue
     echo.
 )
+echo.
+
+REM Installer python-pptx pour traitement PowerPoint
+echo Installation de python-pptx...
+pip install python-pptx>=0.6.21
 echo.
 
 REM Verifier l'installation CUDA

@@ -14,12 +14,13 @@
 # =============================================
 
 # PyTorch (installer via install_pytorch_cuda.bat pour le support GPU)
-# torch>=2.0.0
-# torchvision>=0.15.0
-# torchaudio>=2.0.0
+# IMPORTANT: torch>=2.6.0 requis pour corriger CVE-2025-32434
+# torch>=2.6.0
+# torchvision>=0.21.0
+# torchaudio>=2.6.0
 
 # Transformers et outils Hugging Face
-transformers>=4.35.0
+transformers>=4.40.0  # Version min pour XLMRobertaModel et BGE-M3
 accelerate>=0.24.0
 safetensors>=0.4.0
 tokenizers>=0.14.0
@@ -56,13 +57,14 @@ Pillow>=10.0.0
 #
 # 1. INSTALLER PYTORCH AVEC CUDA:
 #    ---------------------------
+#    IMPORTANT: torch>=2.6.0 requis pour corriger CVE-2025-32434
 #    Executez install_pytorch_cuda.bat ou utilisez les commandes suivantes:
-#
-#    Pour CUDA 11.8 (Windows):
-#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 #
 #    Pour CUDA 12.1 (Windows):
 #    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+#    Pour CUDA 12.4 (Windows):
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 #
 #    Pour CPU uniquement:
 #    pip install torch torchvision torchaudio
