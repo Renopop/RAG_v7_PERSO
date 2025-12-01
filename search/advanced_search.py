@@ -170,6 +170,9 @@ Réponse:"""
     try:
         if offline_mode and OFFLINE_LLM_AVAILABLE:
             # Mode offline - utiliser le LLM local
+            print("[HyDE] 🔒 Mode OFFLINE - Generation doc hypothetique avec Mistral-7B...")
+            import time
+            _hyde_llm_start = time.time()
             _log.info("[HyDE] 🔒 Mode OFFLINE - Génération avec LLM local (Mistral-7B)...")
 
             # Construire le prompt complet
@@ -183,13 +186,16 @@ Réponse:"""
             )
 
             if content and len(content) > 50:
+                print(f"[HyDE] ✅ Doc hypothetique genere en {time.time() - _hyde_llm_start:.1f}s ({len(content)} chars)")
                 _log.info(f"[HyDE] Document hypothétique généré offline ({len(content)} chars)")
                 return content
             else:
+                print("[HyDE] ⚠️ Reponse offline trop courte, fallback")
                 _log.warning("[HyDE] Réponse offline trop courte, utilisation de la question originale")
                 return None
         else:
             # Mode online
+            print("[HyDE] 🌐 Mode ONLINE - Generation doc hypothetique via API...")
             url = api_base.rstrip("/") + "/chat/completions"
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -669,6 +675,9 @@ def rerank_with_bge(
 
     if offline_mode and OFFLINE_RERANKER_AVAILABLE:
         # Utiliser le reranker local
+        print(f"[RERANK] 🔒 Mode OFFLINE - Reranking {len(documents)} documents...")
+        import time
+        _rerank_start = time.time()
         _log.info(f"[RERANK] 🔒 Mode OFFLINE - Reranking {len(documents)} documents avec BGE Reranker local...")
         try:
             reranker = get_offline_reranker(log=_log)
@@ -684,6 +693,7 @@ def rerank_with_bge(
                 })
 
             if reranked:
+                print(f"[RERANK] ✅ Reranking OFFLINE termine en {time.time() - _rerank_start:.1f}s")
                 _log.info(f"[RERANK] ✅ Reranking OFFLINE terminé. Top score: {reranked[0]['score']:.3f}")
             return reranked
 
