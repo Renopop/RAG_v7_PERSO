@@ -275,7 +275,7 @@ def expand_query_with_llm(
 ) -> List[str]:
     """
     Génère des variations de la question originale pour améliorer le recall.
-    Utilise le LLM local si configuré, sinon l'API.
+    Utilise le LLM local si en mode offline, sinon l'API.
 
     Args:
         question: Question originale
@@ -308,27 +308,50 @@ Réponds UNIQUEMENT avec les variations, une par ligne, sans numérotation ni ex
 
 Génère {num_variations} variations de cette question pour améliorer la recherche:"""
 
+    # Vérifier le mode offline
+    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+
     try:
-        url = api_base.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.7,
-            "max_tokens": 300,
-        }
+        if offline_mode:
+            # Mode offline - utiliser le LLM local
+            _log.info(f"[QUERY-EXPAND] 🔒 Mode OFFLINE - Génération de {num_variations} variations avec LLM local...")
+            try:
+                from core.offline_models import call_llm_offline
+                content = call_llm_offline(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=300,
+                    temperature=0.7,
+                    log=_log
+                )
+            except ImportError:
+                _log.warning("[QUERY-EXPAND] LLM offline non disponible, utilisation de la question originale uniquement.")
+                return queries
+            except Exception as e:
+                _log.warning(f"[QUERY-EXPAND] Échec LLM offline: {e}. Utilisation de la question originale uniquement.")
+                return queries
+        else:
+            # Mode online - utiliser l'API
+            url = api_base.rstrip("/") + "/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 300,
+            }
 
-        resp = http_client.post(url, headers=headers, json=payload, timeout=30.0)
-        resp.raise_for_status()
-        data = resp.json()
+            resp = http_client.post(url, headers=headers, json=payload, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
 
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
         if content:
             # Parser les variations (une par ligne)
@@ -559,6 +582,22 @@ BGE_RERANKER_API_BASE = "https://api.dev.dassault-aviation.pro/bge-reranker-v2-m
 BGE_RERANKER_ENDPOINT = "rerank"
 BGE_RERANKER_API_KEY = "EMPTY"  # Peut être configuré si nécessaire
 
+# Import du mode offline
+try:
+    from core.config_manager import is_offline_mode
+    CONFIG_MANAGER_AVAILABLE = True
+except ImportError:
+    CONFIG_MANAGER_AVAILABLE = False
+    def is_offline_mode():
+        return False
+
+# Import du reranker offline
+try:
+    from core.offline_models import get_offline_reranker
+    OFFLINE_RERANKER_AVAILABLE = True
+except ImportError:
+    OFFLINE_RERANKER_AVAILABLE = False
+
 
 def rerank_with_bge(
     query: str,
@@ -585,7 +624,36 @@ def rerank_with_bge(
     if not documents:
         return []
 
-    _log.info(f"[RERANK] Reranking {len(documents)} documents avec BGE Reranker API...")
+    # Vérifier si on est en mode offline
+    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+
+    if offline_mode and OFFLINE_RERANKER_AVAILABLE:
+        # Utiliser le reranker local
+        _log.info(f"[RERANK] 🔒 Mode OFFLINE - Reranking {len(documents)} documents avec BGE Reranker local...")
+        try:
+            reranker = get_offline_reranker(log=_log)
+            results = reranker.rerank(query, documents, top_k=top_k)
+
+            # Formater les résultats
+            reranked = []
+            for idx, score in results:
+                reranked.append({
+                    "index": idx,
+                    "score": score,
+                    "document": documents[idx] if idx < len(documents) else ""
+                })
+
+            if reranked:
+                _log.info(f"[RERANK] ✅ Reranking OFFLINE terminé. Top score: {reranked[0]['score']:.3f}")
+            return reranked
+
+        except Exception as e:
+            _log.error(f"[RERANK] ❌ Erreur reranking offline: {e}")
+            # Fallback: retourner l'ordre original
+            return [{"index": i, "score": 1.0 - (i * 0.01), "document": documents[i]} for i in range(len(documents))]
+
+    # Mode online - utiliser l'API
+    _log.info(f"[RERANK] 🌐 Reranking {len(documents)} documents avec BGE Reranker API...")
 
     url = f"{BGE_RERANKER_API_BASE}{BGE_RERANKER_ENDPOINT}"
     headers = {
