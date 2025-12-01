@@ -441,6 +441,7 @@ def _run_rag_query_single_collection(
     # ========== EARLY OFFLINE MODE DETECTION ==========
     offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
     if offline_mode:
+        print("[RAG] 🔌 Mode OFFLINE detecte")
         _log.info("[RAG] 🔌 Mode OFFLINE detecte")
 
     # ========== PHASE 3: QUERY UNDERSTANDING ==========
@@ -546,8 +547,10 @@ def _run_rag_query_single_collection(
 
     # 2) Creer le client embeddings approprié (offline detecte plus haut)
     if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        print("[RAG] 🔌 Mode OFFLINE - chargement embeddings BGE-M3...")
         _log.info("[RAG] 🔌 Mode OFFLINE - utilisation embeddings locaux (BGE-M3)")
         offline_emb_client = get_offline_embeddings(log=_log)
+        print("[RAG] ✅ Embeddings BGE-M3 prets")
         http_client = None  # Pas necessaire en mode offline
 
         # Fonction d'embedding offline
@@ -629,6 +632,9 @@ def _run_rag_query_single_collection(
 
     # Option A: HyDE (Hypothetical Document Embeddings) - si pas de hybrid
     if not should_hybrid and use_hyde and HYDE_AVAILABLE:
+        print("[RAG] 🧪 Debut HyDE...")
+        import time
+        _hyde_start = time.time()
         _log.info("[RAG] 🧪 Mode HyDE activé (Hypothetical Document Embeddings)")
         raw = search_with_hyde(
             question=question,
@@ -642,10 +648,14 @@ def _run_rag_query_single_collection(
             use_both=True,  # Combine HyDE + question originale
             log=_log,
         )
+        print(f"[RAG] ✅ HyDE termine en {time.time() - _hyde_start:.1f}s")
         _log.info("[RAG] ✅ HyDE search completed")
 
     # Option B: Query Expansion - si pas de hybrid ni HyDE
     elif not should_hybrid and use_query_expansion and ADVANCED_SEARCH_AVAILABLE:
+        print(f"[RAG] 🔄 Debut Query Expansion ({num_query_variations} variations)...")
+        import time
+        _qe_start = time.time()
         _log.info(f"[RAG] 🔄 Mode Query Expansion activé ({num_query_variations} variations)")
 
         # Générer les variations de la question
@@ -658,6 +668,7 @@ def _run_rag_query_single_collection(
             num_variations=num_query_variations,
             log=_log,
         )
+        print(f"[RAG] Variations generees en {time.time() - _qe_start:.1f}s")
 
         # Recherche multi-query
         raw = run_multi_query_search(
@@ -667,6 +678,7 @@ def _run_rag_query_single_collection(
             top_k=top_k,
             log=_log,
         )
+        print(f"[RAG] ✅ Query Expansion termine en {time.time() - _qe_start:.1f}s")
         _log.info(f"[RAG] ✅ Multi-query search completed ({len(queries)} queries)")
 
     # Option C: Mode standard (une seule requête) - si aucune autre option
@@ -792,6 +804,9 @@ def _run_rag_query_single_collection(
 
     # ========== RE-RANKING BGE (cross-encoder) ==========
     if use_bge_reranker and BGE_RERANKER_AVAILABLE:
+        print("[RAG] 🔄 Debut BGE Reranker...")
+        import time
+        _rerank_start = time.time()
         _log.info("[RAG] 🔄 Applying BGE Reranker...")
         try:
             sources = apply_reranking_to_sources(
@@ -801,6 +816,7 @@ def _run_rag_query_single_collection(
                 http_client=http_client,
                 log=_log
             )
+            print(f"[RAG] ✅ BGE Reranker termine en {time.time() - _rerank_start:.1f}s")
 
             # Reconstruire le contexte avec l'ordre des sources reranked
             context_blocks = []
@@ -952,13 +968,18 @@ def _run_rag_query_single_collection(
 
     # 6) Appel LLM (DALLEM online ou Mistral offline)
     if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        print("[RAG] 🔌 Appel LLM local (Mistral-7B)...")
         _log.info("[RAG] 🔌 Appel LLM local (Mistral-7B)...")
+        import time
+        _llm_start = time.time()
         answer = call_llm_offline(
             question=question,
             context=full_context,
             log=_log,
         )
+        print(f"[RAG] ✅ LLM termine en {time.time() - _llm_start:.1f}s")
     else:
+        print("[RAG] 🌐 Appel LLM online (DALLEM)...")
         answer = call_dallem_chat(
             http_client=http_client,
             question=question,
