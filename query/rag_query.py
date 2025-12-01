@@ -19,6 +19,26 @@ from core.models_utils import (
     call_dallem_chat,
 )
 
+# Import du mode offline
+try:
+    from core.config_manager import is_offline_mode
+    CONFIG_MANAGER_AVAILABLE = True
+except ImportError:
+    CONFIG_MANAGER_AVAILABLE = False
+    def is_offline_mode():
+        return False
+
+# Import des fonctions offline
+try:
+    from core.offline_models import (
+        get_offline_embeddings,
+        call_llm_offline,
+        embed_in_batches_offline,
+    )
+    OFFLINE_MODELS_AVAILABLE = True
+except ImportError:
+    OFFLINE_MODELS_AVAILABLE = False
+
 # Import optionnel du FeedbackStore pour le re-ranking
 try:
     from feedback.feedback_store import FeedbackStore
@@ -454,6 +474,11 @@ def _run_rag_query_single_collection(
         except Exception as e:
             _log.warning(f"[RAG] Query understanding failed: {e}")
 
+    # ========== DETECTION MODE OFFLINE (early) ==========
+    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+    if offline_mode:
+        _log.info("[RAG] 🔌 Mode OFFLINE detecte")
+
     # ========== PHASE 2: SEMANTIC CACHE CHECK ==========
     semantic_cache = None
     question_embedding = None
@@ -463,23 +488,28 @@ def _run_rag_query_single_collection(
             semantic_cache = get_semantic_cache(cache_dir=cache_dir, log=_log)
 
             # Pré-calculer l'embedding de la question pour le cache
-            http_client = create_http_client()
-            emb_client = DirectOpenAIEmbeddings(
-                model=EMBED_MODEL,
-                api_key=SNOWFLAKE_API_KEY,
-                base_url=SNOWFLAKE_API_BASE,
-                http_client=http_client,
-                role_prefix=True,
-                logger=_log,
-            )
-            question_embedding = embed_in_batches(
-                texts=[question],
-                role="query",
-                batch_size=1,
-                emb_client=emb_client,
-                log=_log,
-                dry_run=False,
-            )[0].tolist()
+            if offline_mode and OFFLINE_MODELS_AVAILABLE:
+                import numpy as np
+                offline_emb = get_offline_embeddings(log=_log)
+                question_embedding = offline_emb.embed_queries([question])[0]
+            else:
+                http_client = create_http_client()
+                emb_client = DirectOpenAIEmbeddings(
+                    model=EMBED_MODEL,
+                    api_key=SNOWFLAKE_API_KEY,
+                    base_url=SNOWFLAKE_API_BASE,
+                    http_client=http_client,
+                    role_prefix=True,
+                    logger=_log,
+                )
+                question_embedding = embed_in_batches(
+                    texts=[question],
+                    role="query",
+                    batch_size=1,
+                    emb_client=emb_client,
+                    log=_log,
+                    dry_run=False,
+                )[0].tolist()
 
             # Vérifier le cache
             cached_result = semantic_cache.get(
@@ -514,29 +544,44 @@ def _run_rag_query_single_collection(
     if cache_outdated:
         _log.warning(f"[RAG] ⚠️ Cache obsolète pour {collection_name} - utilisation réseau")
 
-    # 2) Client embeddings Snowflake
-    http_client = create_http_client()
-    emb_client = DirectOpenAIEmbeddings(
-        model=EMBED_MODEL,
-        api_key=SNOWFLAKE_API_KEY,
-        base_url=SNOWFLAKE_API_BASE,
-        http_client=http_client,
-        role_prefix=True,
-        logger=_log,
-    )
+    # 2) Creer le client embeddings approprié (offline detecte plus haut)
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        _log.info("[RAG] 🔌 Mode OFFLINE - utilisation embeddings locaux (BGE-M3)")
+        offline_emb_client = get_offline_embeddings(log=_log)
+        http_client = None  # Pas necessaire en mode offline
+
+        # Fonction d'embedding offline
+        def embed_query(q: str):
+            import numpy as np
+            result = offline_emb_client.embed_queries([q])
+            return np.array(result[0], dtype=np.float32)
+    else:
+        # Mode online - utiliser Snowflake
+        if offline_mode and not OFFLINE_MODELS_AVAILABLE:
+            _log.warning("[RAG] Mode offline demande mais modeles non disponibles - utilisation mode online")
+
+        http_client = create_http_client()
+        emb_client = DirectOpenAIEmbeddings(
+            model=EMBED_MODEL,
+            api_key=SNOWFLAKE_API_KEY,
+            base_url=SNOWFLAKE_API_BASE,
+            http_client=http_client,
+            role_prefix=True,
+            logger=_log,
+        )
+
+        # Fonction d'embedding online
+        def embed_query(q: str):
+            return embed_in_batches(
+                texts=[q],
+                role="query",
+                batch_size=1,
+                emb_client=emb_client,
+                log=_log,
+                dry_run=False,
+            )[0]
 
     # 3) Recherche avec différentes stratégies
-
-    # Fonction d'embedding pour les recherches
-    def embed_query(q: str):
-        return embed_in_batches(
-            texts=[q],
-            role="query",
-            batch_size=1,
-            emb_client=emb_client,
-            log=_log,
-            dry_run=False,
-        )[0]
 
     # ========== PHASE 2: HYBRID SEARCH (AUTO) ==========
     # Déterminer si on utilise la recherche hybride
@@ -905,13 +950,21 @@ def _run_rag_query_single_collection(
             "using_cache": using_cache,
         }
 
-    # 6) Appel LLM DALLEM
-    answer = call_dallem_chat(
-        http_client=http_client,
-        question=question,
-        context=full_context,
-        log=_log,
-    )
+    # 6) Appel LLM (DALLEM online ou Mistral offline)
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        _log.info("[RAG] 🔌 Appel LLM local (Mistral-7B)...")
+        answer = call_llm_offline(
+            question=question,
+            context=full_context,
+            log=_log,
+        )
+    else:
+        answer = call_dallem_chat(
+            http_client=http_client,
+            question=question,
+            context=full_context,
+            log=_log,
+        )
 
     # ========== PHASE 3: ANSWER GROUNDING (hallucination detection) ==========
     grounding_report = None
@@ -1195,13 +1248,23 @@ def run_rag_query(
                 "using_cache": False,
             }
 
-        http_client = create_http_client()
-        answer = call_dallem_chat(
-            http_client=http_client,
-            question=(question or "").strip(),
-            context=global_context,
-            log=_log,
-        )
+        # Appel LLM (offline ou online)
+        offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
+        if offline_mode and OFFLINE_MODELS_AVAILABLE:
+            _log.info("[RAG-ALL] 🔌 Appel LLM local (Mistral-7B)...")
+            answer = call_llm_offline(
+                question=(question or "").strip(),
+                context=global_context,
+                log=_log,
+            )
+        else:
+            http_client = create_http_client()
+            answer = call_dallem_chat(
+                http_client=http_client,
+                question=(question or "").strip(),
+                context=global_context,
+                log=_log,
+            )
 
         return {
             "answer": answer,
@@ -1321,25 +1384,37 @@ def run_multi_collection_rag_query(
             _log.warning(f"[RAG-MULTI] Query understanding failed: {e}")
 
     # ========== SETUP EMBEDDING CLIENT ==========
-    http_client = create_http_client()
-    emb_client = DirectOpenAIEmbeddings(
-        model=EMBED_MODEL,
-        api_key=SNOWFLAKE_API_KEY,
-        base_url=SNOWFLAKE_API_BASE,
-        http_client=http_client,
-        role_prefix=True,
-        logger=_log,
-    )
+    offline_mode = CONFIG_MANAGER_AVAILABLE and is_offline_mode()
 
-    def embed_query(q: str):
-        return embed_in_batches(
-            texts=[q],
-            role="query",
-            batch_size=1,
-            emb_client=emb_client,
-            log=_log,
-            dry_run=False,
-        )[0]
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        _log.info("[RAG-MULTI] 🔌 Mode OFFLINE - utilisation embeddings locaux (BGE-M3)")
+        offline_emb_client = get_offline_embeddings(log=_log)
+        http_client = None
+
+        def embed_query(q: str):
+            import numpy as np
+            result = offline_emb_client.embed_queries([q])
+            return np.array(result[0], dtype=np.float32)
+    else:
+        http_client = create_http_client()
+        emb_client = DirectOpenAIEmbeddings(
+            model=EMBED_MODEL,
+            api_key=SNOWFLAKE_API_KEY,
+            base_url=SNOWFLAKE_API_BASE,
+            http_client=http_client,
+            role_prefix=True,
+            logger=_log,
+        )
+
+        def embed_query(q: str):
+            return embed_in_batches(
+                texts=[q],
+                role="query",
+                batch_size=1,
+                emb_client=emb_client,
+                log=_log,
+                dry_run=False,
+            )[0]
 
     # ========== MULTI-COLLECTION SEARCH ==========
     try:
@@ -1419,13 +1494,21 @@ def run_multi_collection_rag_query(
         }
 
     # ========== CALL LLM ==========
-    _log.info("[RAG-MULTI] Calling LLM for answer generation...")
-    answer = call_dallem_chat(
-        http_client=http_client,
-        question=question,
-        context=context_str,
-        log=_log,
-    )
+    if offline_mode and OFFLINE_MODELS_AVAILABLE:
+        _log.info("[RAG-MULTI] 🔌 Appel LLM local (Mistral-7B)...")
+        answer = call_llm_offline(
+            question=question,
+            context=context_str,
+            log=_log,
+        )
+    else:
+        _log.info("[RAG-MULTI] Calling LLM (DALLEM) for answer generation...")
+        answer = call_dallem_chat(
+            http_client=http_client,
+            question=question,
+            context=context_str,
+            log=_log,
+        )
 
     # ========== ANSWER GROUNDING ==========
     grounding_report = None
