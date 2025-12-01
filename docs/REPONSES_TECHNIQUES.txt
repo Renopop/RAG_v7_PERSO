@@ -1,0 +1,93 @@
+================================================================================
+                    RÉPONSES AUX QUESTIONS TECHNIQUES RAG
+                              Version 2.1 - 01/12/2025
+================================================================================
+
+
+1. LOST IN THE MIDDLE - AFFICHAGE VS CONTEXTE LLM
+================================================================================
+
+CORRIGÉ - Le réordonnancement "Lost in the Middle" est maintenant appliqué
+UNIQUEMENT au contexte envoyé au LLM, pas à l'affichage des résultats.
+
++---------------------------+--------------------------------------------------+
+| Élément                   | Ordre                                            |
++---------------------------+--------------------------------------------------+
+| Affichage utilisateur     | Ordre original par pertinence (1, 2, 3, 4...)    |
+| Contexte LLM              | Réordonné (1, 3, 5... 6, 4, 2) pour éviter       |
+|                           | le "lost in middle"                              |
++---------------------------+--------------------------------------------------+
+
+L'objectif premier du RAG (trouver le bon document et répertoire associé)
+est préservé grâce à l'affichage par ordre de pertinence.
+
+
+2. DICTIONNAIRE TECHNIQUE (~750 TERMES)
+================================================================================
+
+Traitement : LISTE PYTHON HARDCODÉE (ni mini RAG, ni SQL, ni prompt externe)
+
+Fichier : chunking/chunking.py
+Code    : TECHNICAL_INDICATORS = {"shall", "must", "fatigue", "fuselage", ...}
+
++------------------------+-----------------------------------------------------+
+| Usage                  | Description                                         |
++------------------------+-----------------------------------------------------+
+| Analyse de densité     | Compte les termes techniques → adapte la taille     |
+|                        | des chunks (800-2000 caractères)                    |
+| Extraction keywords    | Bonus scoring ×2 pour les termes du dictionnaire    |
++------------------------+-----------------------------------------------------+
+
+Ce n'est PAS un RAG séparé : c'est un simple matching de mots utilisé
+pendant l'ingestion et l'analyse des requêtes.
+
+
+3. CACHE SÉMANTIQUE POUR REQUÊTES
+================================================================================
+
+Le cache n'est PAS sur un serveur - il est LOCAL à chaque instance Streamlit.
+
++------------------------+-----------------------------------------------------+
+| Paramètre              | Valeur                                              |
++------------------------+-----------------------------------------------------+
+| Stockage               | Fichier local "semantic_cache.json"                 |
+| Seuil similarité       | 95% (cosine similarity des embeddings question)     |
+| TTL                    | 1 heure                                             |
+| Max entrées            | 1000 requêtes                                       |
++------------------------+-----------------------------------------------------+
+
+Fonctionnement : Si une question est similaire à 95%+ à une question déjà
+posée, la réponse cachée est retournée immédiatement sans appel LLM.
+
+
+4. CACHE LOCAL DES BASES FAISS (TÉLÉTRAVAIL)
+================================================================================
+
++------------------------+-----------------------------------------------------+
+| Question               | Réponse                                             |
++------------------------+-----------------------------------------------------+
+| Où stocké ?            | ~/.cache/ragme_up/ (Linux/Mac)                      |
+|                        | %TEMP%\faiss_local_cache (Windows)                  |
+| Durée ?                | PAS DE TTL FIXE - validé par hash à chaque requête  |
+| Max bases ?            | PAS DE LIMITE - uniquement limité par espace disque |
+| Invalidation ?         | Automatique si le hash de la base réseau change     |
++------------------------+-----------------------------------------------------+
+
+Structure du cache :
+
+    ~/.cache/ragme_up/
+    └── [hash_collection]/
+        ├── index.faiss      # Index vectoriel local
+        ├── metadata.json    # Métadonnées des chunks
+        └── .hash            # Hash de validation
+
+Le cache est particulièrement utile pour le télétravail :
+- La première requête copie la base en local (~quelques secondes)
+- Les requêtes suivantes sont quasi-instantanées (pas d'accès réseau)
+- Si la base réseau change, un avertissement s'affiche et le cache
+  peut être mis à jour via le bouton "📥 Copier local"
+
+
+================================================================================
+                              FIN DU DOCUMENT
+================================================================================
