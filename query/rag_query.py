@@ -1205,7 +1205,9 @@ def run_rag_query(
         all_context_blocks: List[str] = []
         any_cache_outdated = False  # Track si au moins un cache est obsolète
 
-        for col_name in collections:  # FAISS retourne directement les noms (strings)
+        print(f"[RAG-ALL] Mode ALL avec {len(collections)} collections: {collections}")
+        for i, col_name in enumerate(collections, 1):  # FAISS retourne directement les noms (strings)
+            print(f"[RAG-ALL] ({i}/{len(collections)}) Traitement collection: {col_name}")
             _log.info(f"[RAG-ALL-SYNTH] Retrieval sur collection '{col_name}'")
 
             try:
